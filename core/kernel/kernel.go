@@ -19,8 +19,9 @@ type Engine struct {
 	Cancel context.CancelFunc
 
 	inject.Injector
-	modules   map[string]Module
-	modulesMu sync.Mutex
+	modules      []Module
+	moduleByName map[string]Module
+	modulesMu    sync.Mutex
 }
 
 type Config struct {
@@ -32,9 +33,9 @@ func New(config ...Config) *Engine {
 		panic("config can't be empty")
 	}
 	return &Engine{
-		config:   config[0],
-		Injector: inject.New(),
-		modules:  make(map[string]Module),
+		config:       config[0],
+		Injector:     inject.New(),
+		moduleByName: make(map[string]Module),
 	}
 }
 
@@ -135,13 +136,14 @@ func (e *Engine) Serve() {
 func (e *Engine) Stop() error {
 	wg := sync.WaitGroup{}
 	wg.Add(len(e.modules))
-	for _, m := range e.modules {
-		err := m.Stop(&wg, e.Ctx)
-		if err != nil {
-			return err
+
+	var firstErr error
+	for i := len(e.modules) - 1; i >= 0; i-- {
+		if err := e.modules[i].Stop(&wg, e.Ctx); err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
 	wg.Wait()
 
-	return nil
+	return firstErr
 }

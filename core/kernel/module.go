@@ -32,10 +32,11 @@ func (e *Engine) RegMod(mods ...Module) {
 		if mod.Name() == "" {
 			panic("name of module can't be empty")
 		}
-		if _, ok := e.modules[mod.Name()]; ok {
+		if _, ok := e.moduleByName[mod.Name()]; ok {
 			panic("module " + mod.Name() + " already exists")
 		}
-		e.modules[mod.Name()] = mod
+		e.modules = append(e.modules, mod)
+		e.moduleByName[mod.Name()] = mod
 	}
 }
 
