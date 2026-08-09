@@ -53,7 +53,7 @@ MarketplaceServer 是一个基于 jframe 模块化内核的企业级 Claude Code
 
 - 一个托管仓库只承载一个 Plugin；Plugin 和 repository 是一对一关系。
 - 仓库内容以 bare Git repository 为权威来源，数据库只保存资源归属、权限、展示信息、refs/版本镜像和审计信息，不复制完整 Git 对象。
-- 每个 Plugin 必须在可发布 commit 上包含合法的 Claude Code Plugin manifest。发布版本前必须从目标 commit 读取并校验 manifest。
+- 每个 Plugin 必须在可发布 commit 上包含合法的 `.claude-plugin/plugin.json`。发布版本前必须从目标 commit 读取并校验 manifest。
 - repository slug 在同一 owner namespace（用户或团队）内唯一；数据库 ID 才是内部主键，文件系统路径不能直接信任用户输入。
 - 删除默认采用软删除/回收站语义；物理删除 Git 数据属于独立、可审计的高风险操作。
 - Git push 后通过受控 hook/事件刷新 refs 和版本元数据，并提供周期性 reconciliation 修复 Git 与数据库不一致。
@@ -89,7 +89,12 @@ MarketplaceServer 是一个基于 jframe 模块化内核的企业级 Claude Code
 - 模板包含可编辑 draft 和不可变 published revision。稳定 URL 指向最新已发布修订，同时应提供按 revision 获取的可复现 URL。
 - 发布时解析版本选择、校验每个 Plugin manifest 和 source、生成确定性 JSON，并保存发布快照；不要在每次 GET 时根据浮动分支产生不同结果。
 - 输出必须符合 Claude Code 当前官方 Marketplace schema。实现或修改字段前先核对官方文档/JSON Schema，不得臆造兼容字段。
-- 每个 Plugin 的 `source` 必须指向调用者可访问的托管 Git 地址，并与模板选择的 HTTPS/SSH clone 模式一致。
+- 输出的顶层对象至少包含唯一、kebab-case 的 `name`、带 `name` 的 `owner` 和 `plugins` 数组；不得使用 Anthropic 官方保留或仿冒名称。
+- 由稳定 HTTP URL 直接提供的 `marketplace.json` 只会被 Claude Code 作为单个 JSON 文件下载，因此 Plugin `source` 禁止使用 `./...` 相对路径，必须使用调用者可访问的外部 source。
+- 通用 HTTPS/SSH Git Plugin source 使用官方对象格式 `{"source":"url","url":"...","ref":"...","sha":"..."}`；不要自创 `httpsUrl`、`sshUrl`、`cloneUrl`、`transport`，也不要把 Plugin source 类型写成 `git` 或 `ssh`。
+- HTTPS 与 SSH 双模式通过不同模板 URL 输出不同的 `source.url`。同一客户端二选一的索引可以使用相同 marketplace `name`；如果需要同时注册，必须使用不同 `name`，因为 Claude Code 会用后加入的同名 Marketplace 替换旧来源。
+- Git 发布 source 优先固定 40 位 commit SHA；若显式填写 Plugin `version`，内容更新时必须同步 bump version，否则 Claude Code 的版本缓存可能继续复用旧内容。
+- 不要同时在 `.claude-plugin/plugin.json` 和 Marketplace Plugin entry 中维护 `version`；Plugin manifest 的版本优先且不会提示冲突。
 - JSON 输出使用稳定排序和标准序列化，设置正确的 `Content-Type`、`ETag` 和缓存策略；草稿绝不通过正式 URL 暴露。
 - 私有模板与其中的私有 Plugin 必须同时通过权限检查。不得因为拿到索引 URL 就绕过仓库读取权限。
 - 禁止在索引 URL、JSON 或 clone URL 中泄露长期 Token、私钥或服务器文件路径。
@@ -338,7 +343,7 @@ Git storage 不能只存在于容器临时文件系统。备份和恢复必须�
 9. 权限必须在服务端统一执行，不能只在 Svelte 前端控制。
 10. Git 命令禁止经 shell 拼接；所有路径必须限制在仓库存储根目录。
 11. 发布版本和 Marketplace revision 必须可复现、可审计；不能用浮动分支伪装不可变发布。
-12. `marketplace.json` 必须以当前 Claude Code 官方 schema 为准；不猜字段。
+12. `marketplace.json` 必须以当前 Claude Code 官方 schema 为准；不猜字段。直接 URL 索引不能使用相对 Plugin source，通用 Git Plugin source 类型使用 `url`。
 13. frontend 必须是 Svelte + Tailwind 静态构建并由 `embed.FS` 托管；生产环境不启动 Node SSR。
 14. 新模块设计使用 `jframe-module-design`，模块内部实现使用 `jframe-module-dev`。
 15. 不顺手重构无关 jframe 基础代码；发现框架缺陷时先用测试证明，再做最小修复。
