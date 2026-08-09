@@ -151,15 +151,18 @@ mod/frontend/
 - Tailwind 在前端构建阶段生成 CSS；生产二进制不包含 Node.js 运行时。
 - 前端依赖安装必须使用 lockfile 的可复现命令，例如 `npm ci`；仓库只能保留一种生效的包管理器 lockfile。
 - 标准构建顺序：前端依赖安装 → 前端静态构建 → `go build`/`go test`。
+- `go build` 不会自动执行 `go generate`。若使用 `go:generate` 封装前端构建，CI、Docker 和发布脚本仍必须显式执行生成步骤。
 - Docker 使用 Node builder stage 生成 `dist`，再由 Go builder 编译，最终镜像只包含 Go 二进制及必要运行时文件。
 - 不手工编辑 `dist`。源码改动必须重新构建并验证嵌入产物。
+- 只嵌入生产 `dist`；禁止嵌入 `.env*`、`node_modules` 或前端源码目录。
 - 若 `go test ./...` 需要空的嵌入目录占位，使用明确的构建策略解决；不要提交伪造的生产 bundle。
 
 ### HTTP 服务约束
 
-- `frontend` 在 `Load()` 中 `hub.Load(&jin.Engine)`，通过 `fs.Sub` 使用嵌入的 `dist`。
-- `/api/`、`/gapi/`、`/git/`、`/marketplaces/`、`/health`、`/debug/` 等后端路径禁止进入 SPA fallback。
-- SPA history fallback 只处理适合前端导航的 `GET`/`HEAD` 请求；静态文件不存在时返回 `index.html`，API/Git 路径仍返回后端 404。
+- `frontend` 在 `Load()` 中 `hub.Load(&jin.Engine)`，通过 `fs.Sub` 使用嵌入的 `dist`；不得直接 import `mod/jinx`，也不得自行监听端口。
+- SPA fallback 必须由 `jin.Engine.NoRoute()` 提供；禁止注册 `/*path`、`/*any` 等根 catch-all。`frontend` 是唯一允许设置全局 `NoRoute` 的模块。
+- `/api/`、`/gapi/`、`/git/`、`/marketplaces/`、`/healthz`、`/debug/`、`/metrics` 等后端路径禁止进入 SPA fallback。
+- SPA history fallback 只处理适合前端导航的 `GET`/`HEAD` 请求；静态文件不存在且路径没有文件扩展名时才返回 `index.html`，API/Git 路径和缺失的 `.js`/`.css` 等资源必须返回 404。
 - 带内容哈希的资源使用长期不可变缓存；`index.html` 和运行时配置使用 `no-cache` 或短缓存。
 - 正确设置 MIME、`Content-Length`、`ETag`/修改时间，并支持 HEAD。
 - 禁止把服务器密钥、数据库凭据、Git 凭据或私有运行配置编译进前端 bundle。
@@ -167,7 +170,7 @@ mod/frontend/
 
 ### 开发模式
 
-- Svelte dev server 仅用于本地开发，并将 API/Git 相关路径代理到 Go 服务。
+- Svelte dev server 仅用于本地开发，并将 API/Git 相关路径代理到 Go 服务；若 Go 端提供 dev proxy，目标只能是 loopback 地址且生产环境必须拒绝启用，避免形成 SSRF/open proxy。
 - 生产和集成测试必须验证 Go `embed.FS` 实际提供的静态构建，而不只验证 dev server。
 - 前端至少覆盖登录、用户/团队、成员权限、Plugin、仓库 clone 信息、版本发布、Marketplace 模板和发布 URL 等管理流程。
 
