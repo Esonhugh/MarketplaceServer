@@ -1,6 +1,6 @@
 # DI 参考
 
-本文档维护 jFrame DI 容器中**可由业务模块 Load 的共享类型**。新增基础设施模块 Map 新类型时，请同步更新此表。
+本文档维护 MarketplaceServer 当前五模块运行时中可通过 jFrame DI 容器共享的类型。当前运行时模块固定为 `jin`、`sql`、`git`、`backend`、`frontend`。
 
 ## 基本用法
 
@@ -13,34 +13,42 @@ hub.Invoke(func(db *gorm.DB) { ... })
 
 **规则摘要：**
 
-- Map 总是传指针：`hub.Map(&value)`
-- 同类型只能 Map 一个值；多个同类依赖需用包装类型区分
-- Map 使用 `hub.Map(&value)` 时，容器内存储类型常为 `**T`，Load 时写 `var v *T; hub.Load(&v)`
+- `hub.Map` 按项目现有约定传入变量地址，例如 `hub.Map(&db)`。
+- `hub.Load` 必须检查 error；缺失依赖应使模块启动失败。
+- 同一具体类型只能 Map 一个值；多个同类依赖必须使用有语义的 wrapper type。
+- 业务模块只通过稳定 contract 共享跨模块能力，不直接导入其他模块的 DAO/model。
 
-业务模块通常在 `Load()` 阶段 Load 依赖并组装 handler / service；基础设施模块在 `PreInit()` 连接资源并 Map。
+## 当前共享类型一览
 
-## 共享类型一览
+| Load 变量类型 | Map 来源 | 可用阶段 | 当前消费者 |
+|---|---|---|---|
+| `net.Listener` | 内核 `cmd/server/server.go` 创建 TCP listener 后 Map | PreInit 起 | 预留给需要底层 listener 的基础设施 |
+| `cmux.CMux` | 内核 `cmd/server/server.go` 基于 listener 创建并 Map | PreInit 起 | `mod/jin` 在 `Start()` 中加载，用于 HTTP listener 匹配 |
+| `*jin.Engine` (`github.com/juanjiTech/jin`) | `mod/jin` 在 `PreInit()` 创建并 Map | Init 起 | `mod/git` 注册 Smart HTTP；`mod/backend` 注册 `/api/v1`；`mod/frontend` 注册静态资源与 SPA fallback |
+| `*gorm.DB` | `mod/sql` 在 `PreInit()` 打开数据库并 Map | Init 起 | `mod/backend` 在 `PostInit()` 组装服务 |
+| `gitservice.RepositoryService` (`github.com/Esonhugh/MarketplaceServer/pkg/gitservice`) | `mod/git` 在 `Init()` 创建 Git filesystem/process contract 并 Map | PostInit 起 | `mod/backend` 在 `PostInit()` 组装服务；方法只接受已解析并严格校验的不透明 repository ID/storage key |
+| `gitservice.DistributionReader` | `mod/git` 在 `Init()` Map 只读投影视图 | PostInit 起 | distribution Git handlers；仅支持 advertise/upload-pack，不包含 receive-pack、仓库初始化或投影构建 |
+| `gitservice.ProjectionBuilder` | `mod/git` 在 `Init()` Map 发布侧 builder | PostInit 起 | `mod/backend` publication service；请求侧 handler 不得加载此 contract |
+| `gitservice.RepositoryResolver` (`github.com/Esonhugh/MarketplaceServer/pkg/gitservice`) | `mod/backend` 在 `PostInit()` Map；当前为显式 fail-closed 占位实现 | Load 起 | `mod/git` 在 `Load()` 获取，先把 URL namespace/repository slug 解析为不含 GORM model 的 `Repository{ID, Visibility, Status}`，再调用 Git service |
+| `distributionservice.Resolver` (`github.com/Esonhugh/MarketplaceServer/pkg/distributionservice`) | `mod/backend` 在 `PostInit()` Map | Load 起 | `mod/git` Public distribution routes；`ResolveMarketplace` 按持久化且不可变的 `{normalized-marketplace-name}-{8-lowercase-hex}` public key 解析，`ResolvePlugin` 按 distribution UUID 解析；每个请求只解析一次当前不可变 projection grant |
 
-以下类型由内核或内置模块 Map，业务模块可按类型 Load 使用：
+> **Load 示例：** `mod/sql` Map 的是 `&db`（其中 `db` 类型为 `*gorm.DB`），消费者写 `var db *gorm.DB; err := hub.Load(&db)`。
 
-| 类型 | Map 来源 | 可用阶段 |
-|------|----------|----------|
-| `*net.Listener` | 内核 (`cmd/server/server.go`) | PreInit 起 |
-| `cmux.CMux` | 内核 (`cmd/server/server.go`) | PreInit 起 |
-| `**jin.Engine` | `jinx` PreInit | Init 起 |
-| `**gorm.DB` | `myDB` / `pgsql` PreInit | Init 起 |
-| `**redis.Client` | `rds` PreInit | Init 起 |
-| `*grpc.Server` | `grpcGateway` PreInit | Init 起 |
-| `*gateway.Gateway` | `grpcGateway` PostInit | Load 起 |
-| `**b2.Client`, `**b2.Bucket` | `b2x` PreInit | Init 起 |
+## 五模块 DI 边界
 
-> **Load 示例：** Map 的是 `&db`（`*gorm.DB`），Load 时 `var db *gorm.DB; hub.Load(&db)`。
+- `jin`：消费 `cmux.CMux`；提供 `*jin.Engine`。
+- `sql`：提供 `*gorm.DB`。
+- `git`：在 `Init()` 提供 `gitservice.RepositoryService`；在 `Load()` 消费 `*jin.Engine`、`gitservice.RepositoryResolver` 与 `distributionservice.Resolver`，注册 Git Smart HTTP 和 Public distribution routes。物理路径固定由 opaque ID/storage key 计算，不接受 URL slug。Marketplace public route 只接受 public key，不提供旧 UUID route；Plugin distribution route 仍接受 UUID。
+- `backend`：在 `PostInit()` 消费 `*jin.Engine`、`*gorm.DB`、`gitservice.RepositoryService`，并提供窄 `gitservice.RepositoryResolver` 与 `distributionservice.Resolver` contract；后者按 Marketplace public key 或 Plugin distribution UUID 定位 active immutable projection，同时保持 Marketplace internal ID、FK 和 pointer 为 UUID。除此 contract 外不向全局 DI 暴露内部领域对象。
+- `frontend`：消费 `*jin.Engine`；只注册嵌入式静态资源和 `NoRoute` fallback，不提供共享 DI 类型。
+
+旧的 `jinx`、`myDB`、`pgsql`、`rds`、`grpcGateway`、`b2x`、`pyroscope`、`uptrace`、`jinPprof` 等模块不在 MarketplaceServer 当前运行时模块清单内；不要在新业务代码中依赖它们提供的 DI 类型。
 
 ## 何时读基础设施模块源码
 
 **优先查本表** — 多数业务开发只需知道类型与可用阶段，在约定生命周期阶段 `hub.Load` 即可。
 
-**仍不确定时** — 可以阅读对应模块（如 `mod/myDB/`、`mod/jinx/`）的 `mod.go`，确认 Map 时机、配置项或边界行为；这不违背 jFrame 的模块边界，只是多消耗一些上下文。
+**仍不确定时** — 可以阅读对应模块（如 `mod/jin/`、`mod/sql/`、`mod/git/`）的 `mod.go`，确认 Map 时机、配置项或边界行为。
 
 **不要**在业务模块里重复创建已有基础设施提供的连接（例如再 `gorm.Open` 一次），应 Load 容器内已有实例。
 
