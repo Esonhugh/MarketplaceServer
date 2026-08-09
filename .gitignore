@@ -3,3 +3,8 @@
 
 config.yaml
 *.log
+
+# Frontend dependencies and local Vite cache.
+# Keep mod/frontend/dist tracked because the Go frontend module embeds it.
+mod/frontend/web/node_modules/
+mod/frontend/web/.vite/

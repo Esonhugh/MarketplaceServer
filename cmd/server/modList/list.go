@@ -2,23 +2,17 @@ package modList
 
 import (
 	"github.com/Esonhugh/MarketplaceServer/core/kernel"
-	"github.com/Esonhugh/MarketplaceServer/mod/b2x"
-	"github.com/Esonhugh/MarketplaceServer/mod/grpcGateway"
-	"github.com/Esonhugh/MarketplaceServer/mod/jinPprof"
-	"github.com/Esonhugh/MarketplaceServer/mod/jinx"
-	"github.com/Esonhugh/MarketplaceServer/mod/myDB"
-	"github.com/Esonhugh/MarketplaceServer/mod/pyroscope"
-	"github.com/Esonhugh/MarketplaceServer/mod/rds"
-	"github.com/Esonhugh/MarketplaceServer/mod/uptrace"
+	"github.com/Esonhugh/MarketplaceServer/mod/backend"
+	"github.com/Esonhugh/MarketplaceServer/mod/frontend"
+	"github.com/Esonhugh/MarketplaceServer/mod/git"
+	"github.com/Esonhugh/MarketplaceServer/mod/jin"
+	"github.com/Esonhugh/MarketplaceServer/mod/sql"
 )
 
 var ModList = []kernel.Module{
-	&b2x.Mod{},
-	&grpcGateway.Mod{},
-	&jinPprof.Mod{},
-	&jinx.Mod{},
-	&myDB.Mod{},
-	&pyroscope.Mod{},
-	&rds.Mod{},
-	&uptrace.Mod{},
+	&jin.Mod{},
+	&sql.Mod{},
+	&git.Mod{},
+	&backend.Mod{},
+	&frontend.Mod{},
 }

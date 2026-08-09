@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 func TestGenYamlConfigWithMod(t *testing.T) {
 	if testing.Short() {
@@ -15,7 +18,7 @@ func TestGenYamlConfigWithMod(t *testing.T) {
 		args    args
 		wantErr bool
 	}{
-		{"test", args{"./5config.yaml", true}, false},
+		{"test", args{filepath.Join(t.TempDir(), "config.yaml"), true}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
