@@ -1,0 +1,127 @@
+package auth_test
+
+import (
+	"context"
+	"testing"
+
+	"github.com/Esonhugh/MarketplaceServer/pkg/auth"
+)
+
+func TestPrincipalAndScopeBehavior(t *testing.T) {
+	t.Parallel()
+
+	anonymous := auth.AnonymousPrincipal()
+	if !anonymous.IsAnonymous() || anonymous.IsUser() {
+		t.Fatal("anonymous principal has the wrong kind")
+	}
+	if anonymous.UserID() != "" || anonymous.Username() != "" {
+		t.Fatal("anonymous principal contains user identity")
+	}
+	if anonymous.CredentialKind() != auth.CredentialNone {
+		t.Fatalf("anonymous credential kind = %q", anonymous.CredentialKind())
+	}
+
+	zeroScopesUser, err := auth.NewUserPrincipal("user-1", "alice", auth.CredentialAccountPassword, auth.ScopeSet{})
+	if err != nil {
+		t.Fatalf("NewUserPrincipal with zero scopes: %v", err)
+	}
+	if zeroScopesUser.Allows(auth.ActionRepositoryRead) {
+		t.Fatal("zero-value scope set must fail closed")
+	}
+
+	passwordUser, err := auth.NewUserPrincipal("user-1", "alice", auth.CredentialAccountPassword, auth.UnrestrictedScopes())
+	if err != nil {
+		t.Fatalf("NewUserPrincipal: %v", err)
+	}
+	if !passwordUser.IsUser() || passwordUser.UserID() != "user-1" || passwordUser.Username() != "alice" {
+		t.Fatal("user principal lost immutable identity")
+	}
+	if !passwordUser.Allows(auth.ActionRepositoryWrite) {
+		t.Fatal("unrestricted principal should allow repository.write")
+	}
+
+	apiKeyUser, err := auth.NewUserPrincipal("user-1", "alice", auth.CredentialAPIKey,
+		auth.RestrictedScopes(auth.ActionRepositoryRead, auth.ActionPluginRead, auth.ActionRepositoryRead))
+	if err != nil {
+		t.Fatalf("NewUserPrincipal: %v", err)
+	}
+	if !apiKeyUser.Allows(auth.ActionRepositoryRead) || apiKeyUser.Allows(auth.ActionRepositoryWrite) {
+		t.Fatal("restricted scopes were not enforced")
+	}
+	got := apiKeyUser.Scopes().Actions()
+	if len(got) != 2 || got[0] != auth.ActionPluginRead || got[1] != auth.ActionRepositoryRead {
+		t.Fatalf("normalized scopes = %v", got)
+	}
+}
+
+func TestPrincipalValidationAndContext(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name       string
+		userID     string
+		username   string
+		credential auth.CredentialKind
+	}{
+		{name: "missing user id", username: "alice", credential: auth.CredentialAccountPassword},
+		{name: "missing username", userID: "user-1", credential: auth.CredentialAccountPassword},
+		{name: "none credential", userID: "user-1", username: "alice", credential: auth.CredentialNone},
+		{name: "unknown credential", userID: "user-1", username: "alice", credential: auth.CredentialKind("cookie")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := auth.NewUserPrincipal(tc.userID, tc.username, tc.credential, auth.UnrestrictedScopes()); err == nil {
+				t.Fatal("NewUserPrincipal unexpectedly succeeded")
+			}
+		})
+	}
+
+	if _, ok := auth.PrincipalFromContext(context.Background()); ok {
+		t.Fatal("empty context unexpectedly contained a principal")
+	}
+	principal, err := auth.NewUserPrincipal("user-1", "alice", auth.CredentialAPIKey,
+		auth.RestrictedScopes(auth.ActionTokenRead))
+	if err != nil {
+		t.Fatalf("NewUserPrincipal: %v", err)
+	}
+	ctx := auth.ContextWithPrincipal(context.Background(), principal)
+	got, ok := auth.PrincipalFromContext(ctx)
+	if !ok || got.UserID() != principal.UserID() || got.Username() != principal.Username() {
+		t.Fatal("principal did not round trip through context")
+	}
+}
+
+func TestApprovedActionValues(t *testing.T) {
+	t.Parallel()
+
+	got := []auth.Action{
+		auth.ActionMarketplaceRead,
+		auth.ActionPluginRead,
+		auth.ActionRepositoryRead,
+		auth.ActionRepositoryWrite,
+		auth.ActionTokenRead,
+		auth.ActionTokenWrite,
+	}
+	want := []string{"marketplace.read", "plugin.read", "repository.read", "repository.write", "token.read", "token.write"}
+	for i := range got {
+		if string(got[i]) != want[i] {
+			t.Fatalf("action %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+var (
+	_ auth.BasicAuthenticator = basicAuthenticatorStub{}
+	_ auth.Authorizer         = authorizerStub{}
+)
+
+type basicAuthenticatorStub struct{}
+
+func (basicAuthenticatorStub) AuthenticateBasic(context.Context, string, string) (auth.Principal, error) {
+	return auth.AnonymousPrincipal(), nil
+}
+
+type authorizerStub struct{}
+
+func (authorizerStub) Authorize(context.Context, auth.Principal, auth.Action, auth.ResourceRef) error {
+	return nil
+}
