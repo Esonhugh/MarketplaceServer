@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/juanjiTech/jframe/conf"
-	"github.com/juanjiTech/jframe/core/kernel"
-	"github.com/juanjiTech/jframe/mod/jinx/healthcheck"
+	"github.com/Esonhugh/MarketplaceServer/conf"
+	"github.com/Esonhugh/MarketplaceServer/core/kernel"
+	"github.com/Esonhugh/MarketplaceServer/mod/jinx/healthcheck"
 	"github.com/juanjiTech/jin"
 	"github.com/juanjiTech/jin/middleware/cors"
 	sentryjin "github.com/juanjiTech/sentry-jin"

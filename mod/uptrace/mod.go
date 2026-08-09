@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/juanjiTech/jframe/core/kernel"
+	"github.com/Esonhugh/MarketplaceServer/core/kernel"
 	"github.com/opentracing/opentracing-go"
 	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/uptrace/uptrace-go/uptrace"

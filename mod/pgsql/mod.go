@@ -3,7 +3,7 @@ package pgsql
 import (
 	"errors"
 	"fmt"
-	"github.com/juanjiTech/jframe/core/kernel"
+	"github.com/Esonhugh/MarketplaceServer/core/kernel"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )

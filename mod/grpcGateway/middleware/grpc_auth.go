@@ -2,10 +2,10 @@ package middleware
 
 import (
 	"context"
+	"github.com/Esonhugh/MarketplaceServer/core/logx"
+	"github.com/Esonhugh/MarketplaceServer/pkg/auth"
+	"github.com/Esonhugh/MarketplaceServer/pkg/ctxKey"
 	grpcAuth "github.com/grpc-ecosystem/go-grpc-middleware/auth"
-	"github.com/juanjiTech/jframe/core/logx"
-	"github.com/juanjiTech/jframe/pkg/auth"
-	"github.com/juanjiTech/jframe/pkg/ctxKey"
 )
 
 func AuthInterceptor(ctx context.Context) (context.Context, error) {

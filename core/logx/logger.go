@@ -4,8 +4,8 @@ import (
 	"log"
 	"os"
 
-	"github.com/juanjiTech/jframe/conf"
-	"github.com/juanjiTech/jframe/pkg/clsLog"
+	"github.com/Esonhugh/MarketplaceServer/conf"
+	"github.com/Esonhugh/MarketplaceServer/pkg/clsLog"
 	tencentcloud_cls_sdk_go "github.com/tencentcloud/tencentcloud-cls-sdk-go"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"

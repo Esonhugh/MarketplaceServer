@@ -35,7 +35,7 @@ Models define your data structures. For database-backed models, embed `stdao.Mod
 // mod/<name>/model/user.go
 package model
 
-import "github.com/juanjiTech/jframe/pkg/stdao"
+import "github.com/Esonhugh/MarketplaceServer/pkg/stdao"
 
 type User struct {
     stdao.Model
@@ -81,8 +81,8 @@ package dao
 
 import (
     "context"
-    "github.com/juanjiTech/jframe/pkg/stdao"
-    "github.com/juanjiTech/jframe/mod/<name>/model"
+    "github.com/Esonhugh/MarketplaceServer/pkg/stdao"
+    "github.com/Esonhugh/MarketplaceServer/mod/<name>/model"
     "gorm.io/gorm"
 )
 
@@ -132,8 +132,8 @@ package service
 
 import (
     "context"
-    "github.com/juanjiTech/jframe/mod/<name>/dao"
-    "github.com/juanjiTech/jframe/mod/<name>/model"
+    "github.com/Esonhugh/MarketplaceServer/mod/<name>/dao"
+    "github.com/Esonhugh/MarketplaceServer/mod/<name>/model"
     "github.com/pkg/errors"
 )
 
@@ -327,9 +327,9 @@ import (
     "github.com/juanjiTech/jin"
     "github.com/juanjiTech/jin/middleware/binding"
     "github.com/juanjiTech/jin/render"
-    "github.com/juanjiTech/jframe/mod/<name>/model"
-    "github.com/juanjiTech/jframe/mod/<name>/service"
-    "github.com/juanjiTech/jframe/mod/<name>/e"
+    "github.com/Esonhugh/MarketplaceServer/mod/<name>/model"
+    "github.com/Esonhugh/MarketplaceServer/mod/<name>/service"
+    "github.com/Esonhugh/MarketplaceServer/mod/<name>/e"
     "errors"
 )
 

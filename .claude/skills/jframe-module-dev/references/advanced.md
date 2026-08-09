@@ -79,7 +79,7 @@ gRPC gateway routes are mounted at `/gapi/*` on the HTTP server. The gRPC server
 For dynamic, database-backed settings that can change at runtime:
 
 ```go
-import "github.com/juanjiTech/jframe/pkg/settings"
+import "github.com/Esonhugh/MarketplaceServer/pkg/settings"
 
 // Define a setting
 var maxRetries = settings.NewItem[int](settings.ItemConfig[int]{

@@ -3,7 +3,7 @@ package settings
 import (
 	"context"
 
-	"github.com/juanjiTech/jframe/pkg/stdao"
+	"github.com/Esonhugh/MarketplaceServer/pkg/stdao"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"

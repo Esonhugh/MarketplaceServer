@@ -1,4 +1,4 @@
-module github.com/juanjiTech/jframe
+module github.com/Esonhugh/MarketplaceServer
 
 go 1.24.0
 

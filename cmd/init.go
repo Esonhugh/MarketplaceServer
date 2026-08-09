@@ -1,9 +1,9 @@
 package cmd
 
 import (
-	"github.com/juanjiTech/jframe/cmd/config"
-	"github.com/juanjiTech/jframe/cmd/create"
-	"github.com/juanjiTech/jframe/cmd/server"
+	"github.com/Esonhugh/MarketplaceServer/cmd/config"
+	"github.com/Esonhugh/MarketplaceServer/cmd/create"
+	"github.com/Esonhugh/MarketplaceServer/cmd/server"
 	"github.com/spf13/cobra"
 	"os"
 )

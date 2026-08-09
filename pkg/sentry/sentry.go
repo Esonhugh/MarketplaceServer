@@ -2,8 +2,8 @@ package sentry
 
 import (
 	"fmt"
+	"github.com/Esonhugh/MarketplaceServer/conf"
 	"github.com/getsentry/sentry-go"
-	"github.com/juanjiTech/jframe/conf"
 )
 
 func Init() {

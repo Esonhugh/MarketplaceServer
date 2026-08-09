@@ -8,7 +8,7 @@ import (
 	"os"
 	"path"
 
-	"github.com/juanjiTech/jframe/mod/example"
+	"github.com/Esonhugh/MarketplaceServer/mod/example"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )

@@ -1,15 +1,15 @@
 package modList
 
 import (
-	"github.com/juanjiTech/jframe/core/kernel"
-	"github.com/juanjiTech/jframe/mod/b2x"
-	"github.com/juanjiTech/jframe/mod/grpcGateway"
-	"github.com/juanjiTech/jframe/mod/jinPprof"
-	"github.com/juanjiTech/jframe/mod/jinx"
-	"github.com/juanjiTech/jframe/mod/myDB"
-	"github.com/juanjiTech/jframe/mod/pyroscope"
-	"github.com/juanjiTech/jframe/mod/rds"
-	"github.com/juanjiTech/jframe/mod/uptrace"
+	"github.com/Esonhugh/MarketplaceServer/core/kernel"
+	"github.com/Esonhugh/MarketplaceServer/mod/b2x"
+	"github.com/Esonhugh/MarketplaceServer/mod/grpcGateway"
+	"github.com/Esonhugh/MarketplaceServer/mod/jinPprof"
+	"github.com/Esonhugh/MarketplaceServer/mod/jinx"
+	"github.com/Esonhugh/MarketplaceServer/mod/myDB"
+	"github.com/Esonhugh/MarketplaceServer/mod/pyroscope"
+	"github.com/Esonhugh/MarketplaceServer/mod/rds"
+	"github.com/Esonhugh/MarketplaceServer/mod/uptrace"
 )
 
 var ModList = []kernel.Module{

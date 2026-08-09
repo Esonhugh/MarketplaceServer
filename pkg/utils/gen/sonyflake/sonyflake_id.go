@@ -1,7 +1,7 @@
 package sonyflake
 
 import (
-	"github.com/juanjiTech/jframe/core/logx"
+	"github.com/Esonhugh/MarketplaceServer/core/logx"
 	"github.com/sony/sonyflake"
 )
 

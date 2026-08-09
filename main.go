@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/juanjiTech/jframe/cmd"
+	"github.com/Esonhugh/MarketplaceServer/cmd"
 )
 
 func main() {

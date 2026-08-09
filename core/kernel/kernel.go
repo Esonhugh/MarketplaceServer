@@ -6,8 +6,8 @@ import (
 	"reflect"
 	"sync"
 
+	"github.com/Esonhugh/MarketplaceServer/core/logx"
 	"github.com/juanjiTech/inject/v2"
-	"github.com/juanjiTech/jframe/core/logx"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 )

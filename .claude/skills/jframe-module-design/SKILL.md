@@ -198,7 +198,7 @@ import (
     "errors"
     "sync"
 
-    "github.com/juanjiTech/jframe/core/kernel"
+    "github.com/Esonhugh/MarketplaceServer/core/kernel"
     "github.com/juanjiTech/jin"
     "github.com/juanjiTech/jin/middleware/binding"
     "github.com/juanjiTech/jin/render"

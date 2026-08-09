@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/juanjiTech/jframe/core/kernel"
-	"github.com/juanjiTech/jframe/mod/jinx/healthcheck"
+	"github.com/Esonhugh/MarketplaceServer/core/kernel"
+	"github.com/Esonhugh/MarketplaceServer/mod/jinx/healthcheck"
 	rds "github.com/redis/go-redis/v9"
 )
 

@@ -5,16 +5,16 @@ import (
 	"os"
 	"sync"
 
+	"github.com/Esonhugh/MarketplaceServer/core/kernel"
 	"github.com/grafana/pyroscope-go"
-	"github.com/juanjiTech/jframe/core/kernel"
 )
 
 type Config struct {
-    ApplicationName string `yaml:"applicationName" mapstructure:"applicationName"`
-    ServerAddress   string `yaml:"serverAddress" mapstructure:"serverAddress"`
-    BasicAuthUser   string `yaml:"basicAuthUser" mapstructure:"basicAuthUser"`
-    BasicAuthPass   string `yaml:"basicAuthPass" mapstructure:"basicAuthPass"`
-    TenantID        string `yaml:"tenantID" mapstructure:"tenantID"`
+	ApplicationName string `yaml:"applicationName" mapstructure:"applicationName"`
+	ServerAddress   string `yaml:"serverAddress" mapstructure:"serverAddress"`
+	BasicAuthUser   string `yaml:"basicAuthUser" mapstructure:"basicAuthUser"`
+	BasicAuthPass   string `yaml:"basicAuthPass" mapstructure:"basicAuthPass"`
+	TenantID        string `yaml:"tenantID" mapstructure:"tenantID"`
 }
 
 var _ kernel.Module = (*Mod)(nil)
