@@ -1,55 +1,45 @@
-# jFrame 使用指南
+# 使用与本地开发
 
-本文档介绍 jFrame 的架构、CLI 与日常开发流程。产品定位与 AI 友好特性见 [README](../README.md)。
+本文记录 MarketplaceServer 当前可用的 CLI、配置和开发流程。系统边界见 [架构](architecture.md)，生产与验证要求见 [运维、测试与交付](operations.md)。
 
-## 架构概览
+## 运行时概览
 
-jFrame 的核心是 `core/kernel/` 中的 Engine：启动时加载 `cmd/server/modList/list.go` 中注册的所有 `kernel.Module`，按固定顺序执行生命周期，并通过 DI 容器（`inject/v2`）在模块间传递依赖。
+`main.go → cmd.Execute()` 提供 Cobra 子命令。`server` 加载 `cmd/server/modList/list.go` 中固定的五个模块：
 
-```
-Config 反序列化
-    → PreInit（创建资源，Map 到容器）
-    → Init（校验依赖）
-    → PostInit（跨模块装配）
-    → Load（注册路由等）
-    → Start（各模块独立 goroutine）
-    → Stop（优雅关闭）
+```text
+jin → sql → git → backend → frontend
 ```
 
-业务模块按领域/类别划分，彼此不直接 import，只通过 Hub 的 `Map` / `Load` 通信。基础设施模块在较早阶段 Map 连接与引擎，业务模块在 `Load()` 等阶段 Load 所需类型即可——优先查阅 [DI 参考](di-reference.md) 中的共享类型表；若仍不确定，再阅读对应基础设施模块源码。模块内部推荐分层：
+装配阶段按该顺序确定执行；详细生命周期见 [架构](architecture.md)，可共享类型见 [DI 参考](di-reference.md)。
 
-```
-handler/  → HTTP 请求解析与响应
-service/  → 业务逻辑
-dao/      → 数据访问（可基于 pkg/stdao）
-model/    → 数据模型与 DTO
-e/        → 领域错误码
-```
+## 启动服务
 
-基础设施模块（数据库、Redis、HTTP 网关、可观测性等）与业务模块使用同一套 Module 接口，在 `modList` 中统一注册。
+复制安全示例：
 
-## 项目结构
-
-```
-jframe/
-├── main.go
-├── cmd/
-│   ├── server/              # 启动服务
-│   │   └── modList/list.go  # ★ 模块注册清单
-│   ├── config/              # 生成配置模板
-│   └── create/              # 脚手架生成新模块
-├── conf/                    # 全局配置
-├── core/kernel/             # 内核与 Module 接口
-├── mod/                     # 内置与业务模块
-│   └── example/             # create 命令的模板来源
-└── pkg/                     # 公共工具（auth、stdao、settings 等）
+```bash
+cp config.example.yaml config.yaml
 ```
 
-## CLI 命令
+至少配置：
+
+- `sql.dsn`：PostgreSQL 或 MySQL DSN；
+- `git.storageRoot`：持久化 Git storage root；
+- `MARKETPLACE_API_KEY_PEPPER`：Base64 编码、解码后至少 32 bytes 的随机 secret；
+- `MARKETPLACE_BOOTSTRAP_ADMIN_PASSWORD`：首次初始化管理员时使用的 password。
+
+```bash
+export MARKETPLACE_BOOTSTRAP_ADMIN_PASSWORD='<initial-admin-password>'
+export MARKETPLACE_API_KEY_PEPPER='<base64-secret>'
+go run . server -c ./config.yaml
+```
+
+Secret 不进入 `config.example.yaml`、日志或 frontend bundle。支持的配置键以 [`config.example.yaml`](../config.example.yaml) 为准。
+
+## CLI
 
 ### `server`
 
-加载配置、初始化内核、启动所有已注册模块。
+加载配置、初始化 kernel 并启动五模块运行时：
 
 ```bash
 go run . server -c ./config.yaml
@@ -57,91 +47,77 @@ go run . server -c ./config.yaml
 
 ### `config`
 
-扫描所有已注册模块的 `Config()`，生成 YAML 配置模板。
+扫描当前已注册模块的 `Config()` 并生成 YAML：
 
 ```bash
-go run . config              # 默认写入 ./config.yaml
-go run . config -p ./config.example.yaml -f   # 指定路径并强制覆盖
+go run . config
+go run . config -p ./config.yaml -f
 ```
+
+生成结果不包含可安全投入生产的 secret；仍需通过 protected runtime config/environment 注入。
 
 ### `create`
 
-基于 `mod/example/` 生成新模块目录。
+仓库保留了 jframe 的通用 module scaffolding 命令，但 MarketplaceServer 普通产品功能不得用它新增顶层 runtime module：
 
 ```bash
-go run . create -n users            # 生成 mod/users/
-go run . create -n users -p mymod   # 指定输出目录
-go run . create -n users -f         # 强制覆盖
+go run . create -n example
 ```
 
-生成后在 `cmd/server/modList/list.go` 注册：
+只有经过显式架构决策、确实需要改变五模块拓扑时才使用该命令，并同步 `cmd/server/modList/list.go`、测试、[架构](architecture.md) 与 [DI 参考](di-reference.md)。通常应在 `backend` 内新增领域，或修改现有 `git`/`frontend` 模块。
+
+## Config 规则
+
+模块 Config 字段必须同时带 `yaml` 和 `mapstructure` tag：
 
 ```go
-var ModList = []kernel.Module{
-    // ...
-    &users.Mod{},
+type Config struct {
+    StorageRoot string `yaml:"storageRoot" mapstructure:"storageRoot"`
 }
 ```
 
-## Module 接口
+- 环境变量覆盖配置文件；
+- `hub.Load` 必须检查 error；
+- 新增 operator 配置时同步 `config.example.yaml`，但不写 secret value；
+- 尚未实现的 SSH、public base URL 或调优项不要提前加入配置冒充支持。
 
-所有模块实现 `kernel.Module`，并嵌入 `kernel.UnimplementedModule`：
+## 当前开发落点
 
-```go
-type Mod struct {
-    kernel.UnimplementedModule
-}
+- identity、authorization、distribution 以及未来的业务领域：`mod/backend/domain/`；
+- HTTP handler：`mod/backend/handler/`；
+- Git filesystem、subprocess、Smart HTTP、projection：`mod/git/`；
+- Svelte/Tailwind 源码：`mod/frontend/web/`；
+- frontend embedded output：`mod/frontend/dist/`，只由构建生成；
+- 跨模块 contract：`pkg/*service/` 等稳定 package。
 
-func (m *Mod) Name() string { return "myMod" }
+先读 [当前实现状态](current-state.md) 判断 feature 是否存在，再读目标模块与 tests。不要把业务逻辑写入 `main.go`、`cmd/`，也不要跨模块访问 DAO/model。
 
-// Config()  — 返回配置结构体指针，nil 表示无配置
-// PreInit() — 创建客户端，hub.Map 依赖
-// Init()    — 校验依赖
-// PostInit()— 跨模块装配
-// Load()    — 注册路由
-// Start()   — 长驻任务（独立 goroutine）
-// Stop()    — 优雅关闭（须 defer wg.Done()）
+## Frontend 开发
+
+在 `mod/frontend/web`：
+
+```bash
+npm ci
+npm run check
+npm test
+npm run build
 ```
 
-## 配置系统
+静态输出进入 `mod/frontend/dist` 并由 Go `embed.FS` 编译进 binary。生产不运行 Node SSR。完成后运行 frontend Go tests 和 Go build，验证 reserved backend path 不会落入 SPA fallback。
 
-每个模块通过 `Config()` 返回配置结构体，字段须同时带 `yaml` 与 `mapstructure` tag。内核按模块 `Name()` 映射 YAML 节点：
+## 验证
 
-```yaml
-myMod:
-    addr: "localhost"
-    port: "3306"
+基础检查：
+
+```bash
+git diff --check
+go test ./...
+go vet ./...
+go build ./...
 ```
 
-等价环境变量：`MYMOD_ADDR=localhost`、`MYMOD_PORT=3306`。优先级：环境变量 > config.yaml > 默认值。支持 Viper + fsnotify 热重载。
-
-## jin HTTP 框架
-
-jFrame 使用 `jin`（gin fork），用 DI 替代传统 binding：
-
-- Handler 为任意函数签名，参数由 `inject.Invoke` 注入
-- `binding.JSON(T{})` / `binding.Query(T{})` 解析请求并 Map 到 DI
-- 响应：`c.Render(code, render.JSON{Data: data})`
-
-```go
-j.POST("/api/users", binding.JSON(CreateReq{}), func(req CreateReq, c *jin.Context) {
-    c.Render(http.StatusOK, render.JSON{Data: req.Name})
-})
-```
-
-## DI 容器
-
-Map / Load 基本用法与**共享类型一览表**见 [DI 参考](di-reference.md)。
+PostgreSQL integration tests 需要 `MARKETPLACE_TEST_POSTGRES_DSN`。适用的 race、真实 Git client、frontend 与 publication 检查见 [运维、测试与交付](operations.md)。
 
 ## Docker
 
-```bash
-docker build -t jframe .
-docker compose up -d
-```
-
-本地开发依赖（Redis + MySQL）：
-
-```bash
-docker compose -f docker-compose-dev.yml up -d
-```
+仓库保留 `Dockerfile`、`docker-compose.yml` 与 `docker-compose-dev.yml`，但它们可能包含继承自通用 jframe 的开发假设。使用前应对照当前 `config.example.yaml`、SQL driver、frontend build 和 persistent Git storage 要求审查，不应把旧 MySQL/Redis 示例视为 MarketplaceServer 的权威生产拓扑。

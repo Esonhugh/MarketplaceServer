@@ -46,24 +46,9 @@ Credentials identify a principal but never replace action-specific authorization
 - Secrets, Authorization headers, private keys, and password-bearing URLs are never logged or embedded in the frontend.
 - Tenant-scoped database queries and database constraints prevent cross-namespace ownership ambiguity.
 
-## Current delivery baseline
+## Current delivery status
 
-The current implementation includes:
-
-- deterministic module startup and dependency-safe shutdown;
-- the five-module runtime foundation;
-- embedded frontend serving boundaries;
-- secure authentication primitives;
-- users, personal namespaces, fixed `admin` and dynamic `default` group semantics;
-- transactional bootstrap of the initial administrator;
-- scoped personal access token create, list, and revoke APIs;
-- unified authorization for current user, group, namespace, repository, Plugin, and Marketplace state;
-- authenticated development Git Smart HTTP using passwords or API keys;
-- immutable public Plugin and Marketplace distribution foundations;
-- readable immutable Marketplace public keys;
-- dynamically generated private user Marketplace JSON.
-
-PostgreSQL-backed constraint and production-wiring tests require `MARKETPLACE_TEST_POSTGRES_DSN`; they skip explicitly when it is unavailable.
+Current capabilities and known gaps are maintained in [Current implementation status](current-state.md). This goals document does not serve as a release-status inventory.
 
 ## Success criteria
 

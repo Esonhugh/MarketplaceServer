@@ -1,102 +1,113 @@
-# AI 开发指南
+# AI / Agent 开发工作流
 
-jFrame 面向使用 Cursor、Claude Code 等 AI 编程助手的团队。本文说明如何让 Agent 高效、可控地参与开发。
+本文说明 Agent 在 MarketplaceServer 中如何选择上下文、确定修改归属并控制变更范围。通用 jframe scaffolding 不是本项目的产品架构；根 [CLAUDE.md](../CLAUDE.md) 的五模块规则优先。
 
-## 核心思路
+## 开始前
 
-jFrame 的「AI 友好」来自可预测的结构，而非某个特定 AI 产品：
+1. 读 [CLAUDE.md](../CLAUDE.md) 获取索引和不可违反规则。
+2. 读 [当前实现状态](current-state.md)，确认目标能力是已实现、基础能力还是规划中。
+3. 按修改类型读取：
+   - wiring/DI/lifecycle： [架构](architecture.md) + [DI 参考](di-reference.md)；
+   - identity/auth/publication/data： [产品不变量](product-invariants.md)；
+   - HTTP/Git/distribution： [协议](protocols.md)；
+   - build/deployment/testing： [运维](operations.md)。
+4. 再读取目标源码与 tests；设计文档不能代替当前代码证据。
 
-1. **模块即边界** — 一次改动通常只涉及 `mod/<name>/` 下的一个业务模块。
-2. **生命周期由内核编排** — 启动顺序与阶段调度框架已固定，Agent 不必管理「谁先启动、谁 Map 谁 Load」；只需在约定阶段（基础设施 PreInit Map、业务 Load 组装）写当前模块代码。
-3. **依赖按类型取用，优先查 DI 参考** — 业务模块在 `Load()` 等阶段 `hub.Load(&db)` 即可拿到所需依赖；先查 [DI 参考](di-reference.md) 中的共享类型表，通常不必为了取依赖而通读其他模块。若对 Map 时机、配置或行为仍不确定，再读对应基础设施模块（如 `mod/myDB/mod.go`）亦可。
-4. **模板可复制** — `mod/example/` 与 `create` 命令输出即金标准。
-5. **规则可读取** — `CLAUDE.md` 与 Skills 把约定写进仓库，减少臆测。
+## 先决定修改归属
 
-## 推荐工作流
+MarketplaceServer 的顶层模块固定为 `jin`、`sql`、`git`、`backend`、`frontend`：
 
-### 1. 初始化上下文
+- 业务模型、service、authorization、管理 API：`backend` 内部领域；
+- repository filesystem、Git subprocess/protocol、immutable projection：`git`；
+- 静态 Svelte app、embedded serving、SPA fallback：`frontend`；
+- HTTP/SQL lifecycle 基础设施：分别在 `jin`、`sql`。
 
-在新对话或新任务开始时，提示 Agent：
+普通 feature 不新增 kernel module。新增顶层 module 只适用于明确批准的运行时架构变更，并需要 module-list tests、architecture、DI 和 config 同步。
 
-> 请先阅读 CLAUDE.md，了解 jframe 的 Module 生命周期、DI 规则与分层约定；查依赖类型时用 docs/di-reference.md。
+## 推荐流程
 
-Cursor 会自动加载项目 rules；Claude Code 可直接 `@CLAUDE.md`、`@docs/di-reference.md`。
+### 1. 调查
 
-### 2. 新建模块
+- 用代码、route registration、migration 和 tests 核实当前状态；
+- 检查已有 contract/service，优先复用而不是创建平行抽象；
+- 识别 tenant、authorization、secret、Git path 和 immutable publication 边界；
+- 对照 roadmap，但不要创建空 package 或 future endpoint 冒充进度。
 
-**设计阶段** — 说明需求，让 Agent 使用 `jframe-module-design` skill（或手动参照 `mod/example/`）规划：
+### 2. 设计
 
-- 模块名、`Config` 字段
-- 各生命周期阶段做什么
-- 需要从 DI 容器 Load 哪些依赖（对照 [DI 参考](di-reference.md)）
+非平凡修改先给出可执行计划：
 
-**脚手架** — 执行后再写业务代码：
+- 修改属于哪个现有模块/内部领域；
+- lifecycle 中何时 Map/Load；
+- 是否需要新增窄跨模块 contract；
+- DB、Git filesystem 和 publication 是否涉及跨系统一致性；
+- allow/deny、failure、real-client 与 migration tests；
+- 哪些文档是该事实的唯一权威位置。
 
-```bash
-go run . create -n order
+仅在确实设计新的 jframe 模块或改变模块拓扑时使用 `jframe-module-design`；普通 backend domain 工作不要套用“新 feature = 新 module”。在现有模块内部实现时可使用 `jframe-module-dev`，但必须以本仓库 architecture/invariants 为准。
+
+### 3. 实现
+
+- 先读后改，不跨模块访问内部 DAO/model；
+- handler 只处理协议，service 负责授权和业务 transaction；
+- 所有 `hub.Load` 检查 error，Config 保持双 tag；
+- Git 命令使用 context-bound subprocess 与独立参数；
+- 高风险状态变化、tenant scope 和 secret handling 同步写 deny tests；
+- 不手工编辑 frontend dist，不顺手重构无关 jframe 源码。
+
+### 4. 验证
+
+按 [运维、测试与交付](operations.md) 运行适用检查，并明确报告：
+
+- PostgreSQL suites 是否因缺少 DSN skip；
+- frontend 是否实际重建；
+- Git 是否使用真实 client 验证；
+- 规划中的 SSH/team/audit tests 是否尚不适用。
+
+### 5. 更新文档
+
+- 当前能力变化：`current-state.md`；
+- 模块/lifecycle/contract：`architecture.md` 与 `di-reference.md`；
+- 领域或安全不变量：`product-invariants.md`；
+- route/protocol/cache/schema：`protocols.md`；
+- build/deploy/test：`operations.md`；
+- 未来交付顺序：`roadmap.md`；
+- operator config：`config.example.yaml`。
+
+不要把同一清单复制到多个文档。
+
+## DI 使用
+
+先查 [DI 参考](di-reference.md)，确认 producer、consumer 和可用阶段。只有表中信息不足时再读对应模块 `mod.go`。
+
+```go
+var db *gorm.DB
+if err := hub.Load(&db); err != nil {
+    return fmt.Errorf("load database: %w", err)
+}
 ```
 
-**实现阶段** — 使用 `jframe-module-dev` skill，在 `handler/` → `service/` → `dao/` 自底向上实现，在 `mod.go` 的 `Load()` 中组装并注册路由。
+不要在业务领域重复创建已有 connection/client。跨模块能力使用窄 contract；backend 内部 service 默认不进入全局 DI。
 
-**注册** — 在 `cmd/server/modList/list.go` 添加 `&order.Mod{}`。
+## jin 提醒
 
-### 3. 修改现有模块
+MarketplaceServer 使用 `github.com/juanjiTech/jin`，不是 gin：
 
-提示 Agent 明确模块名与层级，例如：
+- handler 可由 DI 注入参数；
+- binding 使用 jin middleware；
+- JSON 响应使用 `c.Render(..., render.JSON{Data: ...})`；
+- 最终资源授权不因 handler 或 frontend 已检查而省略。
 
-> 在 `mod/users/` 的 service 层增加按邮箱查询用户，不要改动其他模块。
+## 可复制约束
 
-Module 边界 + 分层让 diff 范围自然受限，便于人工与 AI 审查。
-
-### 4. 配置变更
-
-新模块的 `Config()` 结构体写好 `yaml` / `mapstructure` tag 后：
-
-```bash
-go run . config -p config.example.yaml -f
+```text
+- 先读 CLAUDE.md 与 docs/current-state.md，再核对目标源码和 tests
+- 普通业务能力进入 backend domain、git 或 frontend，不新增顶层 kernel.Module
+- 跨模块只用窄 contract/DI，不访问内部 DAO/model
+- 所有 hub.Load 检查 error；Config 双 tag；Stop defer wg.Done()
+- namespace query 与 authorization 默认拒绝，必须有 deny tests
+- Git 不经 shell，路径限制在 storage root
+- published version/revision/projection 不可变，distribution handler 只读
+- secret 不进入日志、URL、前端 bundle 或示例配置
+- 只更新事实对应的唯一权威文档，不把 roadmap 写成当前能力
 ```
-
-## 仓库内 Agent 资源
-
-| 资源 | 路径 | 用途 |
-|------|------|------|
-| DI 共享类型表 | [`docs/di-reference.md`](di-reference.md) | **权威维护位置**：可 Load 的类型、Map 来源、可用阶段 |
-| Agent 开发参考 | [`CLAUDE.md`](../CLAUDE.md) | 生命周期、DI 规则、jin、create 流程、pkg 工具 |
-| 模块设计 Skill | [`.claude/skills/jframe-module-design`](../.claude/skills/jframe-module-design/SKILL.md) | 新建模块、集成外部服务前的架构设计 |
-| 模块实现 Skill | [`.claude/skills/jframe-module-dev`](../.claude/skills/jframe-module-dev/SKILL.md) | handler / service / dao 实现与路由注册 |
-| 模板模块 | [`mod/example/`](../mod/example/) | create 命令复制的金标准 |
-
-## 给 Agent 的约束提示（可复制）
-
-```
-- 新功能 = 新 kernel.Module，业务逻辑不要写在 cmd/ 或 main.go
-- 启动顺序由内核编排，业务模块按约定阶段写代码即可
-- 依赖优先查 docs/di-reference.md，在 Load() 等阶段 hub.Load 按类型取用；不确定时再读对应 mod/<infra>/mod.go
-- 不要在业务模块里重复创建 DI 容器已有的连接
-- 模块间通过 Hub Map/Load 通信，禁止跨模块 direct import
-- Config 字段必须同时有 yaml 和 mapstructure tag
-- hub.Map 传指针；Stop 必须 defer wg.Done()
-- HTTP 用 jin + binding.JSON/Query，响应用 render.JSON
-- 参考 mod/example/ 的分层与 mod.go Load() 组装方式
-```
-
-## 常见问题
-
-**Agent 改了不该改的文件？**  
-在 prompt 中限定 `mod/<target>/` 路径，并强调「只改当前模块」。
-
-**Agent 不了解 jin 与 gin 的差异？**  
-指向 `CLAUDE.md` 的 jin 章节：无 `c.JSON`，Handler 为 DI 注入函数。
-
-**需要集成 MySQL / Redis / gRPC？**  
-先查 [DI 参考](di-reference.md)，在当前模块的 `Load()` 里 `hub.Load` 取用；不要在业务模块里重复创建连接。若表中没有或行为不清楚，再读对应基础设施模块源码。
-
-**Agent 加载了过多无关模块？**  
-提示优先 `@docs/di-reference.md` 与当前 `mod/<name>/`；仅在 DI 表无法解答时再打开 `mod/myDB`、`mod/jinx` 等。启动编排由内核负责，一般无需分析其他模块的完整生命周期实现。
-
-## 延伸阅读
-
-- [DI 参考](di-reference.md) — 共享类型表
-- [使用指南](usage.md) — CLI、配置、Docker
-- [README](../README.md) — 产品定位与快速开始
-- [DeepWiki](https://deepwiki.com/juanjiTech/jframe/) — 在线文档

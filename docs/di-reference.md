@@ -29,7 +29,7 @@ hub.Invoke(func(db *gorm.DB) { ... })
 | `gitservice.RepositoryService` (`github.com/Esonhugh/MarketplaceServer/pkg/gitservice`) | `mod/git` 在 `Init()` 创建 Git filesystem/process contract 并 Map | PostInit 起 | `mod/backend` 在 `PostInit()` 组装服务；方法只接受已解析并严格校验的不透明 repository ID/storage key |
 | `gitservice.DistributionReader` | `mod/git` 在 `Init()` Map 只读投影视图 | PostInit 起 | distribution Git handlers；仅支持 advertise/upload-pack，不包含 receive-pack、仓库初始化或投影构建 |
 | `gitservice.ProjectionBuilder` | `mod/git` 在 `Init()` Map 发布侧 builder | PostInit 起 | `mod/backend` publication service；请求侧 handler 不得加载此 contract |
-| `gitservice.RepositoryResolver` (`github.com/Esonhugh/MarketplaceServer/pkg/gitservice`) | `mod/backend` 在 `PostInit()` Map；当前为显式 fail-closed 占位实现 | Load 起 | `mod/git` 在 `Load()` 获取，先把 URL namespace/repository slug 解析为不含 GORM model 的 `Repository{ID, Visibility, Status}`，再调用 Git service |
+| `gitservice.RepositoryResolver` (`github.com/Esonhugh/MarketplaceServer/pkg/gitservice`) | `mod/backend` 在 `PostInit()` Map；通过 namespace relation 查询当前 repository metadata | Load 起 | `mod/git` 在 `Load()` 获取，先把 URL namespace/repository slug 解析为不含 GORM model 的 `Repository{ID, NamespaceID, OwnerUserID, Visibility, Status}`，再调用 Git service |
 | `distributionservice.Resolver` (`github.com/Esonhugh/MarketplaceServer/pkg/distributionservice`) | `mod/backend` 在 `PostInit()` Map | Load 起 | `mod/git` Public distribution routes；`ResolveMarketplace` 按持久化且不可变的 `{normalized-marketplace-name}-{8-lowercase-hex}` public key 解析，`ResolvePlugin` 按 distribution UUID 解析；每个请求只解析一次当前不可变 projection grant |
 
 > **Load 示例：** `mod/sql` Map 的是 `&db`（其中 `db` 类型为 `*gorm.DB`），消费者写 `var db *gorm.DB; err := hub.Load(&db)`。
@@ -54,6 +54,8 @@ hub.Invoke(func(db *gorm.DB) { ... })
 
 ## 延伸阅读
 
-- [使用指南](usage.md) — 架构与 Module 生命周期
+- [当前实现状态](current-state.md) — 当前模块、领域与路由
+- [系统架构](architecture.md) — 五模块边界与生命周期
+- [使用指南](usage.md) — CLI、配置与本地开发
 - [AI 开发指南](ai-development.md) — Agent 工作流
-- [CLAUDE.md](../CLAUDE.md) — Agent 开发约定（链至本文档维护 DI 类型表）
+- [CLAUDE.md](../CLAUDE.md) — Agent 索引与不可违反规则

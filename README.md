@@ -1,86 +1,78 @@
-![jFrame](https://github.com/juanjiTech/jframe/raw/main/docs/header.webp)
+# MarketplaceServer
 
-# jFrame
+MarketplaceServer 是一个自托管的 Claude Code Plugin 控制、Git 托管与 Marketplace 分发服务。它基于 jframe 模块化内核，以单 Go binary 提供管理 API、Git Smart HTTP、不可变 Marketplace/Plugin distribution 和嵌入式 Svelte frontend。
 
-> AI 友好型 Go 开发框架，面向服务端与桌面端应用——模块化领域边界、固定生命周期与分层约定，支持快速迭代与可审查的变更。
+## 当前能力
 
-jFrame 是一个基于模块化内核与依赖注入的 Go 应用脚手架。业务按模块组织，模块内部再按 handler / service / dao / model 分层；启动顺序由内核统一编排，模块内通过 DI 按类型取用依赖——多数情况下查 [DI 参考](docs/di-reference.md) 并在当前模块内开发即可，不必为了取依赖而通读其他模块。配合 `jframe create` 脚手架与仓库内置的 Agent 指南，人类开发者与 Cursor、Claude 等 AI 助手都能在同一套结构约束下协作，少耗上下文、审查 diff 也更可预期。
+- 固定的 `jin`、`sql`、`git`、`backend`、`frontend` 五模块运行时；
+- 用户、个人 namespace、系统组和管理员 bootstrap；
+- Basic 认证与 scoped personal access token 创建、列表、撤销；
+- 开发 repository 的 Git Smart HTTP clone/fetch/push 与服务端 authorization；
+- Public Marketplace/Plugin immutable Git distribution 与 Marketplace JSON；
+- 按用户当前权限生成的私有 Marketplace JSON；
+- Svelte/Tailwind 静态产物经 `embed.FS` 托管。
 
-除服务端场景外，jFrame 也已在团队内部大量用于桌面端应用开发（闭源项目，此处不展开细节）。
+团队、完整 Plugin/version/Marketplace 管理、审计、SSH Git 和完整管理 UI 仍在规划中。精确状态见 [当前实现状态](docs/current-state.md)，不要用目标设计推断已交付能力。
 
-[框架文档（DeepWiki）](https://deepwiki.com/juanjiTech/jframe/) · [使用指南](docs/usage.md) · [AI 开发指南](docs/ai-development.md)
+## 前置条件
 
-## 为什么 AI 友好
-
-- **模块化领域边界 + 分层约定** — 业务模块按类别高度内聚，模块内固定 handler → service → dao → model 分层；AI 只需聚焦当前模块与层级，减少无关上下文干扰。
-- **固定生命周期 + DI** — 内核按 Config → PreInit → … → Stop 六阶段统一编排启动，AI 不必把注意力耗在启动顺序与模块调度上。写业务模块时在约定阶段（如 `Load()`）通过 `hub.Load` 按类型取用依赖；优先查 [DI 参考](docs/di-reference.md)，上下文可集中在当前模块内。
-- **脚手架 + 金标准模板** — `jframe create -n <name>` 基于 `mod/example/` 生成一致目录结构，AI 生成代码有明确参照。
-- **Agent 指南开箱即用** — 仓库提供 [`CLAUDE.md`](CLAUDE.md) 与 [Agent Skills](.claude/skills/)（模块设计 / 模块实现），Cursor、Claude Code 可直接读取框架约定。
-- **结构约束，审查友好** — 模块边界、DI 规则、配置 tag 均有硬性约定，便于 AI 辅助开发与人工 / AI 代码审查。
-
-## 特性
-
-- **模块化内核** — 所有功能以 `Module` 为单位组织，六阶段生命周期管理启动与关闭
-- **依赖注入** — 基于 `inject/v2`，模块间通过 `Map` / `Load` / `Invoke` 共享依赖，零直接耦合
-- **反射驱动配置** — 每个模块声明 Config，Viper 按模块名自动映射 YAML / 环境变量，支持热重载
-- **脚手架命令** — `jframe create -n <name>` 一键生成模块骨架
-- **协议复用** — HTTP 与 gRPC 通过 cmux 共享同一 TCP 端口
-- **可观测性** — OpenTelemetry (uptrace)、Pyroscope、Sentry、腾讯云 CLS 日志
-- **AI 工具链** — `CLAUDE.md` + Agent Skills，适配 Cursor / Claude 团队工作流
+- Go 版本与 toolchain 以 [`go.mod`](go.mod) 为准；
+- PostgreSQL 或 MySQL；
+- 系统 Git binary；
+- Node/npm 仅用于重新构建 frontend 静态产物。
 
 ## 快速开始
 
-### 前置条件
+```bash
+cp config.example.yaml config.yaml
+```
 
-- Go 1.23+
-- MySQL / PostgreSQL（可选）
-- Redis（可选）
-
-### 启动
+在受保护配置中设置 `sql.dsn`，并通过环境变量提供 identity secret：
 
 ```bash
-# 克隆项目
-git clone https://github.com/juanjiTech/jframe.git
-cd jframe
-
-# 复制配置
-cp config.example.yaml config.yaml
-# 编辑 config.yaml 填入实际配置
-
-# 启动开发环境依赖（可选：本地 Redis + MySQL）
-docker compose -f docker-compose-dev.yml up -d
-
-# 运行
+export MARKETPLACE_BOOTSTRAP_ADMIN_PASSWORD='<initial-admin-password>'
+export MARKETPLACE_API_KEY_PEPPER='<base64-encoded-random-value-at-least-32-bytes>'
 go run . server -c config.yaml
 ```
 
-### 常用命令
+`MARKETPLACE_BOOTSTRAP_ADMIN_PASSWORD` 用于首次管理员初始化；API-key pepper 必须是解码后至少 32 bytes 的 Base64 值。不要把这些 secret 提交到配置或源码。
+
+## 构建
+
+frontend dist 已生成时：
 
 ```bash
-go run . server -c ./config.yaml    # 启动服务
-go run . config                     # 生成配置模板
-go run . create -n users            # 创建新模块
+go test ./...
+go vet ./...
+go build -o marketplace-server .
 ```
 
-模块注册、配置说明、项目结构等详见 [使用指南](docs/usage.md)。
+修改 frontend 时先在 `mod/frontend/web` 执行：
 
-## 用 AI 开发
+```bash
+npm ci
+npm run check
+npm test
+npm run build
+```
 
-1. 让 Agent 先读 [`CLAUDE.md`](CLAUDE.md) — 涵盖 Module 生命周期、DI 规则、jin HTTP 约定等；查可 Load 的类型用 [`docs/di-reference.md`](docs/di-reference.md)。
-2. 新建功能时执行 `go run . create -n <moduleName>`，再按 `mod/example/` 结构实现。
-3. Cursor / Claude 可自动加载 `.claude/skills/jframe-module-design`（设计新模块）与 `jframe-module-dev`（实现 handler / service / dao）。
-
-更多场景与提示词建议见 [AI 开发指南](docs/ai-development.md)。
+完整验证和生产要求见 [运维、测试与交付](docs/operations.md)。
 
 ## 文档
 
 | 文档 | 说明 |
-|------|------|
-| [docs/di-reference.md](docs/di-reference.md) | DI 共享类型表（权威维护位置） |
-| [docs/usage.md](docs/usage.md) | 架构概览、CLI、模块创建、配置与 Docker |
-| [docs/ai-development.md](docs/ai-development.md) | 面向 Cursor / Claude 团队的开发工作流 |
-| [CLAUDE.md](CLAUDE.md) | Agent 开发约定（生命周期、分层、jin 等；DI 类型表见 di-reference） |
-| [DeepWiki](https://deepwiki.com/juanjiTech/jframe/) | 在线框架文档 |
+|---|---|
+| [CLAUDE.md](CLAUDE.md) | Agent 文档索引与不可违反规则 |
+| [docs/current-state.md](docs/current-state.md) | 当前模块、领域、路由和缺口 |
+| [docs/project-goals.md](docs/project-goals.md) | 产品使命和目标 |
+| [docs/architecture.md](docs/architecture.md) | 五模块架构、生命周期和边界 |
+| [docs/product-invariants.md](docs/product-invariants.md) | 领域、安全和一致性不变量 |
+| [docs/protocols.md](docs/protocols.md) | REST、Git 与 distribution 协议 |
+| [docs/usage.md](docs/usage.md) | CLI、配置与开发流程 |
+| [docs/di-reference.md](docs/di-reference.md) | 当前共享 DI 类型 |
+| [docs/operations.md](docs/operations.md) | 测试、构建、部署与恢复 |
+| [docs/roadmap.md](docs/roadmap.md) | 未来交付顺序 |
+| [docs/ai-development.md](docs/ai-development.md) | Agent 开发工作流 |
 
 ## License
 

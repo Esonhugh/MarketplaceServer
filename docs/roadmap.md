@@ -1,6 +1,6 @@
 # MarketplaceServer Roadmap
 
-This roadmap describes future delivery order. Items listed here are planned unless explicitly identified as implemented in `project-goals.md` or verified in the current source tree.
+This roadmap is the authoritative future delivery order. Items listed here are planned unless [current-state.md](current-state.md) explicitly classifies them as implemented or foundation capability; source code and tests remain authoritative.
 
 ## Near-term: complete the single-user Plugin workflow
 
