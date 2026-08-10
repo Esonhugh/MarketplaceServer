@@ -4,6 +4,7 @@ import (
 	"errors"
 	"time"
 
+	identitydomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity"
 	"gorm.io/gorm"
 )
 
@@ -11,46 +12,57 @@ const (
 	StatusActive   = "active"
 	StatusBuilding = "building"
 	StatusRevoked  = "revoked"
+
+	RepositoryStatusProvisioning = "provisioning"
+	RepositoryStatusReady        = "ready"
+	RepositoryStatusReadOnly     = "readOnly"
+	RepositoryStatusError        = "error"
+	RepositoryStatusDeleting     = "deleting"
+	RepositoryStatusDeleted      = "deleted"
 )
 
-type Namespace struct {
-	ID          string    `gorm:"type:char(36);primaryKey"`
-	Slug        string    `gorm:"size:128;not null;uniqueIndex"`
-	DisplayName string    `gorm:"size:255;not null"`
-	CreatedAt   time.Time `gorm:"not null"`
-	UpdatedAt   time.Time `gorm:"not null"`
+func validRepositoryStatus(status string) bool {
+	switch status {
+	case RepositoryStatusProvisioning, RepositoryStatusReady, RepositoryStatusReadOnly,
+		RepositoryStatusError, RepositoryStatusDeleting, RepositoryStatusDeleted:
+		return true
+	default:
+		return false
+	}
 }
 
-func (Namespace) TableName() string { return "namespaces" }
+func repositoryAllowsRead(status string) bool {
+	return status == RepositoryStatusReady || status == RepositoryStatusReadOnly
+}
 
 type Repository struct {
-	ID            string    `gorm:"type:char(36);primaryKey"`
-	NamespaceID   string    `gorm:"type:char(36);not null;uniqueIndex:uidx_repository_namespace_slug"`
-	Slug          string    `gorm:"size:128;not null;uniqueIndex:uidx_repository_namespace_slug"`
-	Visibility    string    `gorm:"size:32;not null"`
-	Status        string    `gorm:"size:32;not null"`
-	StorageKey    string    `gorm:"size:255;not null;uniqueIndex"`
-	DefaultBranch string    `gorm:"size:255"`
-	CreatedAt     time.Time `gorm:"not null"`
-	UpdatedAt     time.Time `gorm:"not null"`
-	Namespace     Namespace `gorm:"constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
+	ID            string                   `gorm:"type:char(36);primaryKey"`
+	NamespaceID   string                   `gorm:"type:char(36);not null;uniqueIndex:uidx_repository_namespace_slug"`
+	Slug          string                   `gorm:"size:128;not null;uniqueIndex:uidx_repository_namespace_slug"`
+	Visibility    string                   `gorm:"size:32;not null"`
+	Status        string                   `gorm:"size:32;not null;check:chk_repositories_status,status IN ('provisioning','ready','readOnly','error','deleting','deleted')"`
+	StorageKey    string                   `gorm:"size:255;not null;uniqueIndex"`
+	DefaultBranch string                   `gorm:"size:255"`
+	CreatedAt     time.Time                `gorm:"not null"`
+	UpdatedAt     time.Time                `gorm:"not null"`
+	Namespace     identitydomain.Namespace `gorm:"constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
 }
 
 func (Repository) TableName() string { return "repositories" }
 
 type Plugin struct {
-	ID           string     `gorm:"type:char(36);primaryKey"`
-	NamespaceID  string     `gorm:"type:char(36);not null;uniqueIndex:uidx_plugin_namespace_slug"`
-	RepositoryID string     `gorm:"type:char(36);not null;uniqueIndex"`
-	Slug         string     `gorm:"size:128;not null;uniqueIndex:uidx_plugin_namespace_slug"`
-	Name         string     `gorm:"size:255;not null"`
-	Description  string     `gorm:"type:text"`
-	Visibility   string     `gorm:"size:32;not null"`
-	Status       string     `gorm:"size:32;not null"`
-	CreatedAt    time.Time  `gorm:"not null"`
-	UpdatedAt    time.Time  `gorm:"not null"`
-	Namespace    Namespace  `gorm:"constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
-	Repository   Repository `gorm:"constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
+	ID           string                   `gorm:"type:char(36);primaryKey"`
+	NamespaceID  string                   `gorm:"type:char(36);not null;uniqueIndex:uidx_plugin_namespace_slug"`
+	RepositoryID string                   `gorm:"type:char(36);not null;uniqueIndex"`
+	Slug         string                   `gorm:"size:128;not null;uniqueIndex:uidx_plugin_namespace_slug"`
+	Name         string                   `gorm:"size:255;not null"`
+	Description  string                   `gorm:"type:text"`
+	Visibility   string                   `gorm:"size:32;not null"`
+	Status       string                   `gorm:"size:32;not null"`
+	CreatedAt    time.Time                `gorm:"not null"`
+	UpdatedAt    time.Time                `gorm:"not null"`
+	Namespace    identitydomain.Namespace `gorm:"constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
+	Repository   Repository               `gorm:"constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
 }
 
 func (Plugin) TableName() string { return "plugins" }
@@ -73,17 +85,17 @@ type PluginVersion struct {
 func (PluginVersion) TableName() string { return "plugin_versions" }
 
 type MarketplaceTemplate struct {
-	ID                  string    `gorm:"type:char(36);primaryKey"`
-	NamespaceID         string    `gorm:"type:char(36);not null;uniqueIndex:uidx_marketplace_namespace_slug"`
-	Slug                string    `gorm:"size:128;not null;uniqueIndex:uidx_marketplace_namespace_slug"`
-	Name                string    `gorm:"size:255;not null"`
-	Description         string    `gorm:"type:text"`
-	Visibility          string    `gorm:"size:32;not null"`
-	Status              string    `gorm:"size:32;not null"`
-	PublishedRevisionID *string   `gorm:"type:char(36);index"`
-	CreatedAt           time.Time `gorm:"not null"`
-	UpdatedAt           time.Time `gorm:"not null"`
-	Namespace           Namespace `gorm:"constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
+	ID                  string                   `gorm:"type:char(36);primaryKey"`
+	NamespaceID         string                   `gorm:"type:char(36);not null;uniqueIndex:uidx_marketplace_namespace_slug"`
+	Slug                string                   `gorm:"size:128;not null;uniqueIndex:uidx_marketplace_namespace_slug"`
+	Name                string                   `gorm:"size:255;not null"`
+	Description         string                   `gorm:"type:text"`
+	Visibility          string                   `gorm:"size:32;not null"`
+	Status              string                   `gorm:"size:32;not null"`
+	PublishedRevisionID *string                  `gorm:"type:char(36);index"`
+	CreatedAt           time.Time                `gorm:"not null"`
+	UpdatedAt           time.Time                `gorm:"not null"`
+	Namespace           identitydomain.Namespace `gorm:"constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
 }
 
 func (MarketplaceTemplate) TableName() string { return "marketplace_templates" }

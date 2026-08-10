@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/Esonhugh/MarketplaceServer/core/kernel"
+	identitydomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity"
+	"github.com/Esonhugh/MarketplaceServer/pkg/auth"
 	"github.com/Esonhugh/MarketplaceServer/pkg/gitservice"
 	"github.com/juanjiTech/inject/v2"
 	"github.com/juanjiTech/jin"
@@ -301,7 +303,14 @@ func TestLoadFailsFastWithoutAssemblyAndIsIdempotent(t *testing.T) {
 }
 
 func testMod() *Mod {
-	return &Mod{migrate: func(*gorm.DB) error { return nil }}
+	return &Mod{
+		environment: identitydomain.MapEnvironment{identitydomain.APIKeyPepperEnvironment: "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE="},
+		migrate:     func(*gorm.DB) error { return nil },
+		initializeIdentity: func(context.Context, *gorm.DB, identitydomain.Environment) (identitydomain.Services, error) {
+			repository, _ := identitydomain.NewRepository(&gorm.DB{})
+			return identitydomain.Services{Repository: repository, Authenticator: &fakeBasicAuthenticator{}}, nil
+		},
+	}
 }
 
 func assembledMod() *Mod {
@@ -335,6 +344,14 @@ func (*fakeProjectionBuilder) VerifyProjection(context.Context, gitservice.Immut
 }
 
 var _ gitservice.ProjectionBuilder = (*fakeProjectionBuilder)(nil)
+
+type fakeBasicAuthenticator struct{}
+
+func (*fakeBasicAuthenticator) AuthenticateBasic(context.Context, string, string) (auth.Principal, error) {
+	return auth.Principal{}, errors.New("not implemented in fake")
+}
+
+var _ auth.BasicAuthenticator = (*fakeBasicAuthenticator)(nil)
 
 type fakeRepositoryService struct{}
 

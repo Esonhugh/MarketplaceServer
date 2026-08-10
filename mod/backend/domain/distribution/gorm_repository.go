@@ -2,6 +2,7 @@ package distribution
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
@@ -24,7 +25,22 @@ func NewGORMRepository(db *gorm.DB) (*GORMRepository, error) {
 func (repository *GORMRepository) FindActivePlugin(ctx context.Context, id uuid.UUID) (PluginDistribution, error) {
 	var record PluginDistribution
 	err := repository.db.WithContext(ctx).
-		Where("id = ? AND status = ? AND revoked_at IS NULL", id.String(), StatusActive).
+		Table("plugin_distributions AS d").
+		Select("d.*").
+		Joins("JOIN marketplace_templates AS t ON t.id = d.template_id").
+		Joins("JOIN plugins AS p ON p.id = d.plugin_id").
+		Joins("JOIN plugin_versions AS v ON v.id = d.plugin_version_id AND v.plugin_id = p.id").
+		Joins("JOIN repositories AS r ON r.id = d.repository_id AND r.id = p.repository_id AND r.namespace_id = p.namespace_id").
+		Where(`d.id = ? AND d.status = ? AND d.revoked_at IS NULL
+			AND t.status = ? AND t.visibility = ?
+			AND p.status = ? AND p.visibility = ?
+			AND v.status = ?
+			AND r.status IN ? AND r.visibility = ?`,
+			id.String(), StatusActive,
+			StatusActive, "public",
+			StatusActive, "public",
+			StatusActive,
+			[]string{RepositoryStatusReady, RepositoryStatusReadOnly}, "public").
 		Take(&record).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return PluginDistribution{}, distributionservice.ErrNotFound
@@ -44,43 +60,57 @@ func (repository *GORMRepository) FindActiveMarketplaceByID(ctx context.Context,
 }
 
 func (repository *GORMRepository) findActiveMarketplace(ctx context.Context, identityQuery string, identity any) (MarketplaceSnapshot, error) {
-	var distribution MarketplaceDistribution
-	err := repository.db.WithContext(ctx).
-		Where(identityQuery+" AND status = ? AND revoked_at IS NULL", identity, StatusActive).
-		Take(&distribution).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return MarketplaceSnapshot{}, distributionservice.ErrNotFound
-	}
-	if err != nil {
-		return MarketplaceSnapshot{}, fmt.Errorf("resolve marketplace distribution: %w", err)
-	}
-	if distribution.CurrentProjectionID == nil || *distribution.CurrentProjectionID == "" {
-		return MarketplaceSnapshot{}, distributionservice.ErrUnavailable
-	}
+	var snapshot MarketplaceSnapshot
+	err := repository.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var distribution MarketplaceDistribution
+		err := tx.
+			Table("marketplace_distributions AS d").
+			Select("d.*").
+			Joins("JOIN marketplace_templates AS t ON t.id = d.template_id").
+			Where("d."+identityQuery+" AND d.status = ? AND d.revoked_at IS NULL AND t.status = ? AND t.visibility = ?", identity, StatusActive, StatusActive, "public").
+			Take(&distribution).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return distributionservice.ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("resolve marketplace distribution: %w", err)
+		}
+		if distribution.CurrentProjectionID == nil || *distribution.CurrentProjectionID == "" {
+			return distributionservice.ErrUnavailable
+		}
 
-	var projection MarketplaceDistributionProjection
-	err = repository.db.WithContext(ctx).
-		Where("id = ? AND marketplace_distribution_id = ? AND status = ?", *distribution.CurrentProjectionID, distribution.ID, StatusActive).
-		Take(&projection).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return MarketplaceSnapshot{}, distributionservice.ErrUnavailable
-	}
-	if err != nil {
-		return MarketplaceSnapshot{}, fmt.Errorf("resolve marketplace projection: %w", err)
-	}
+		var projection MarketplaceDistributionProjection
+		err = tx.
+			Where("id = ? AND marketplace_distribution_id = ? AND status = ?", *distribution.CurrentProjectionID, distribution.ID, StatusActive).
+			Take(&projection).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return distributionservice.ErrUnavailable
+		}
+		if err != nil {
+			return fmt.Errorf("resolve marketplace projection: %w", err)
+		}
 
-	var revision MarketplaceRevision
-	err = repository.db.WithContext(ctx).
-		Where("id = ? AND template_id = ? AND status = ?", projection.RevisionID, distribution.TemplateID, StatusActive).
-		Take(&revision).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return MarketplaceSnapshot{}, distributionservice.ErrUnavailable
-	}
+		var revision MarketplaceRevision
+		err = tx.
+			Where("id = ? AND template_id = ? AND status = ?", projection.RevisionID, distribution.TemplateID, StatusActive).
+			Take(&revision).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return distributionservice.ErrUnavailable
+		}
+		if err != nil {
+			return fmt.Errorf("resolve marketplace revision: %w", err)
+		}
+		if projection.ContentDigest == "" || projection.ContentDigest != revision.ContentDigest {
+			return distributionservice.ErrUnavailable
+		}
+		revision.ContentJSON = append([]byte(nil), revision.ContentJSON...)
+		snapshot = MarketplaceSnapshot{Distribution: distribution, Projection: projection, Revision: revision}
+		return nil
+	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	if err != nil {
-		return MarketplaceSnapshot{}, fmt.Errorf("resolve marketplace revision: %w", err)
+		return MarketplaceSnapshot{}, err
 	}
-	revision.ContentJSON = append([]byte(nil), revision.ContentJSON...)
-	return MarketplaceSnapshot{Distribution: distribution, Projection: projection, Revision: revision}, nil
+	return snapshot, nil
 }
 
 func (repository *GORMRepository) Transaction(ctx context.Context, fn func(RepositoryStore) error) error {

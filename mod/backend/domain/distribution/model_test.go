@@ -10,7 +10,6 @@ import (
 
 func TestMigrationModelsFollowDependencyOrder(t *testing.T) {
 	want := []reflect.Type{
-		reflect.TypeOf(&Namespace{}),
 		reflect.TypeOf(&Repository{}),
 		reflect.TypeOf(&Plugin{}),
 		reflect.TypeOf(&PluginVersion{}),
@@ -21,11 +20,11 @@ func TestMigrationModelsFollowDependencyOrder(t *testing.T) {
 		reflect.TypeOf(&MarketplaceDistributionProjection{}),
 		reflect.TypeOf(&PluginDistribution{}),
 	}
-	if len(migrationModels) != len(want) {
-		t.Fatalf("migration model count = %d, want %d", len(migrationModels), len(want))
+	if len(MigrationModels()) != len(want) {
+		t.Fatalf("migration model count = %d, want %d", len(MigrationModels()), len(want))
 	}
 	for i := range want {
-		if got := reflect.TypeOf(migrationModels[i]); got != want[i] {
+		if got := reflect.TypeOf(MigrationModels()[i]); got != want[i] {
 			t.Fatalf("migration model %d = %v, want %v", i, got, want[i])
 		}
 	}
@@ -42,6 +41,51 @@ func TestImmutableModelsRejectUpdates(t *testing.T) {
 				t.Fatal("immutable model accepted update")
 			}
 		})
+	}
+}
+
+func TestRepositoryStatusContract(t *testing.T) {
+	want := []string{
+		RepositoryStatusProvisioning,
+		RepositoryStatusReady,
+		RepositoryStatusReadOnly,
+		RepositoryStatusError,
+		RepositoryStatusDeleting,
+		RepositoryStatusDeleted,
+	}
+	if got := strings.Join(want, ","); got != "provisioning,ready,readOnly,error,deleting,deleted" {
+		t.Fatalf("repository statuses = %q", got)
+	}
+	for _, status := range want {
+		if !validRepositoryStatus(status) {
+			t.Errorf("validRepositoryStatus(%q) = false", status)
+		}
+	}
+	for _, status := range []string{"", StatusActive, "READY", "unknown"} {
+		if validRepositoryStatus(status) {
+			t.Errorf("validRepositoryStatus(%q) = true", status)
+		}
+	}
+	for _, status := range []string{RepositoryStatusReady, RepositoryStatusReadOnly} {
+		if !repositoryAllowsRead(status) {
+			t.Errorf("repositoryAllowsRead(%q) = false", status)
+		}
+	}
+	for _, status := range []string{RepositoryStatusProvisioning, RepositoryStatusError, RepositoryStatusDeleting, RepositoryStatusDeleted, StatusActive} {
+		if repositoryAllowsRead(status) {
+			t.Errorf("repositoryAllowsRead(%q) = true", status)
+		}
+	}
+
+	field, ok := reflect.TypeOf(Repository{}).FieldByName("Status")
+	if !ok {
+		t.Fatal("Repository.Status is missing")
+	}
+	tag := field.Tag.Get("gorm")
+	for _, value := range want {
+		if !strings.Contains(tag, "'"+value+"'") {
+			t.Errorf("Repository.Status gorm tag %q does not constrain %q", tag, value)
+		}
 	}
 }
 

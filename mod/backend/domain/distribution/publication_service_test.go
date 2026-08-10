@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	identitydomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity"
 	"github.com/Esonhugh/MarketplaceServer/pkg/distributionservice"
 	"github.com/Esonhugh/MarketplaceServer/pkg/gitservice"
 	"github.com/google/uuid"
@@ -215,7 +216,7 @@ func newPublicationFixture() publicationFixture {
 	repository := &fakePublicationRepository{
 		input: PublicationInput{
 			Template:  MarketplaceTemplate{ID: templateID.String(), Slug: "ctf-web", Name: "CTF Web"},
-			Namespace: Namespace{ID: uuid.NewString(), DisplayName: "Security Team"},
+			Namespace: identitydomain.Namespace{ID: uuid.NewString(), Kind: identitydomain.NamespaceKindTeam, Slug: "security", DisplayName: "Security Team"},
 			Versions: []PublicationVersion{{
 				Version:    PluginVersion{ID: versionID.String(), PluginID: pluginID.String(), Version: "1.0.0", TagName: "v1.0.0"},
 				Plugin:     Plugin{ID: pluginID.String(), RepositoryID: repositoryID.String(), Slug: "java-scanner", Description: "Java scanner"},

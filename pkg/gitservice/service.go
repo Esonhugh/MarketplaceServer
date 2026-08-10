@@ -12,14 +12,17 @@ var (
 )
 
 type Repository struct {
-	ID         string
-	Visibility string
-	Status     string
+	ID          string
+	NamespaceID string
+	OwnerUserID string
+	Visibility  string
+	Status      string
 }
 
 const (
 	VisibilityPublic = "public"
 	StatusReady      = "ready"
+	StatusReadOnly   = "readOnly"
 )
 
 type RepositoryResolver interface {
