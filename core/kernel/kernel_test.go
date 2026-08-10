@@ -165,7 +165,7 @@ func TestStartModuleInvokesEveryStartConcurrently(t *testing.T) {
 	}
 }
 
-func TestStopRunsInReverseRegistrationOrder(t *testing.T) {
+func TestStopDrainsIngressThenStopsDependenciesInReverseOrder(t *testing.T) {
 	var got []string
 	record := func(event string) {
 		got = append(got, event)
@@ -173,16 +173,18 @@ func TestStopRunsInReverseRegistrationOrder(t *testing.T) {
 
 	engine := New(Config{})
 	engine.RegMod(
-		&lifecycleModule{name: "alpha", record: record},
-		&lifecycleModule{name: "bravo", record: record},
-		&lifecycleModule{name: "charlie", record: record},
+		&lifecycleModule{name: "jin", record: record},
+		&lifecycleModule{name: "sql", record: record},
+		&lifecycleModule{name: "git", record: record},
+		&lifecycleModule{name: "backend", record: record},
+		&lifecycleModule{name: "frontend", record: record},
 	)
 
 	if err := engine.Stop(); err != nil {
 		t.Fatalf("Stop() error = %v", err)
 	}
 
-	want := []string{"stop:charlie", "stop:bravo", "stop:alpha"}
+	want := []string{"stop:jin", "stop:frontend", "stop:backend", "stop:git", "stop:sql"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Stop() order mismatch: got %v, want %v", got, want)
 	}
@@ -203,6 +205,61 @@ func (m *stopModule) Stop(wg *sync.WaitGroup, _ context.Context) error {
 	defer wg.Done()
 	m.call(m.name)
 	return m.err
+}
+
+func TestStopWaitsForEachModuleBeforeStoppingDependencies(t *testing.T) {
+	release := make(chan struct{})
+	firstDone := make(chan struct{})
+	var got []string
+	var mutex sync.Mutex
+	record := func(name string) {
+		mutex.Lock()
+		got = append(got, name)
+		mutex.Unlock()
+	}
+	first := &blockingStopModule{name: "jin", release: release, done: firstDone, record: record}
+	second := &stopModule{name: "sql", call: record}
+	engine := New(Config{})
+	engine.RegMod(first, second)
+
+	stopped := make(chan error, 1)
+	go func() { stopped <- engine.Stop() }()
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("first module Stop was not called")
+	}
+	mutex.Lock()
+	if !reflect.DeepEqual(got, []string{"jin"}) {
+		t.Fatalf("Stop advanced before jin drained: %v", got)
+	}
+	mutex.Unlock()
+	close(release)
+	if err := <-stopped; err != nil {
+		t.Fatal(err)
+	}
+	mutex.Lock()
+	defer mutex.Unlock()
+	if !reflect.DeepEqual(got, []string{"jin", "sql"}) {
+		t.Fatalf("Stop order = %v", got)
+	}
+}
+
+type blockingStopModule struct {
+	UnimplementedModule
+	name    string
+	release <-chan struct{}
+	done    chan<- struct{}
+	record  func(string)
+}
+
+func (module *blockingStopModule) Name() string { return module.name }
+func (module *blockingStopModule) Stop(wg *sync.WaitGroup, _ context.Context) error {
+	defer wg.Done()
+	module.record(module.name)
+	close(module.done)
+	<-module.release
+	return nil
 }
 
 func TestStopCallsEveryModuleWhenOneReturnsError(t *testing.T) {
@@ -234,7 +291,7 @@ func TestStopCallsEveryModuleWhenOneReturnsError(t *testing.T) {
 		t.Fatal("Stop() did not return after a module error")
 	}
 
-	want := []string{"charlie", "bravo", "alpha"}
+	want := []string{"alpha", "charlie", "bravo"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Stop() calls = %v, want %v", got, want)
 	}

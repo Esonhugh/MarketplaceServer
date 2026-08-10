@@ -134,16 +134,21 @@ func (e *Engine) Serve() {
 }
 
 func (e *Engine) Stop() error {
-	wg := sync.WaitGroup{}
-	wg.Add(len(e.modules))
-
 	var firstErr error
-	for i := len(e.modules) - 1; i >= 0; i-- {
-		if err := e.modules[i].Stop(&wg, e.Ctx); err != nil && firstErr == nil {
+	stop := func(module Module) {
+		wg := sync.WaitGroup{}
+		wg.Add(1)
+		if err := module.Stop(&wg, e.Ctx); err != nil && firstErr == nil {
 			firstErr = err
 		}
+		wg.Wait()
 	}
-	wg.Wait()
-
+	if len(e.modules) == 0 {
+		return nil
+	}
+	stop(e.modules[0])
+	for index := len(e.modules) - 1; index >= 1; index-- {
+		stop(e.modules[index])
+	}
 	return firstErr
 }
