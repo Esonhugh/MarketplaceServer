@@ -73,6 +73,7 @@ npm run build
 | [docs/operations.md](docs/operations.md) | 测试、构建、部署与恢复 |
 | [docs/roadmap.md](docs/roadmap.md) | 未来交付顺序 |
 | [docs/ai-development.md](docs/ai-development.md) | Agent 开发工作流 |
+| [docs/design/README.md](docs/design/README.md) | 通用数据、管理 API contract、ADR 与 system design 索引 |
 
 ## License
 

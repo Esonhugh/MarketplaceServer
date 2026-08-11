@@ -13,7 +13,7 @@ go vet ./...
 go build ./...
 ```
 
-涉及并发、认证、Git 或 publication 核心逻辑时还应运行：
+涉及并发、认证/credential、Git transport/storage、worker、publication/projection 或其他 shared mutable state 时必须运行：
 
 ```bash
 go test -race ./...
@@ -179,6 +179,8 @@ Shutdown 顺序遵循入口优先 drain：
 定期执行恢复演练并记录实际 RPO/RTO；“backup job 成功”不等于可恢复。
 
 ## Feature slice Definition of Done
+
+设计批准、Agent 独占编辑归属、pre-edit TDD 与 feature commit 策略只在 [AI / Agent 开发工作流](ai-development.md) 中定义；本文只维护可执行验证与交付门槛。
 
 1. contract、ownership 与 security boundary 明确；
 2. allow/deny 与非法状态测试齐全；

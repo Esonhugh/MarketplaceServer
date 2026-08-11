@@ -21,7 +21,7 @@
 
 - 错误响应至少包含稳定 `code`、用户可理解的 `message` 与 `requestId`，不返回内部 stack；
 - 创建成功使用 `201`，异步命令 `202`，无 body 删除 `204`，并发冲突 `409`，业务校验 `422`，限流 `429`；
-- 列表使用有界 cursor pagination，并返回 `items` 与 `nextCursor`；
+- target list 使用 `page`/`size`，默认 `1`/`20`、最大 size `100`，并返回 exact filtered `total`；已部署 PAT cursor list 仍按 deployed OpenAPI 描述，等待单独迁移；
 - 可变资源应提供 ETag/version，并通过 `If-Match` 防止覆盖并发更新；
 - namespace URL slug 必须先解析为 namespace ID，再授权和查询；
 - 高风险副作用使用显式 command endpoint，不通过通用 `PATCH status` 触发；
@@ -46,8 +46,8 @@ POST /git/{namespace}/{repo}.git/git-receive-pack
 2. allowlist `git-upload-pack`/`git-receive-pack`；未知 service 不传给 Git。
 3. 解析 Basic/API credential 为 Principal，不记录 Authorization。
 4. backend resolver 将 slug 转为 opaque repository ID、visibility、status。
-5. upload-pack 检查 `repository.read`，receive-pack 检查 `repository.write`；private read 不能因 Git transport 绕过授权。
-6. receive-pack 还需执行 repository 状态、protected ref、quota 与并发规则；当前未完成项见路线图。
+5. 通过 Plugin 解析其隐藏 repository；Plugin read 同时授权 metadata 与 upload-pack，Plugin write 单独授权 receive-pack。Repository 不暴露独立产品权限。
+6. receive-pack 还需执行 Plugin/repository 状态、protected ref、quota 与并发规则；default branch/tag proposed commit 在隔离目录运行 Claude Plugin validation 和 exact name check。
 7. 用 `exec.CommandContext` 和独立参数调用受控 Git binary；物理路径只由 storage root 与 opaque ID 计算，使用 containment check，环境不继承危险 `GIT_*`。
 8. 流式转发 Git content type，限制 body/header，设置 timeout，client disconnect 时取消 subprocess。
 9. 成功 push 通过幂等 outbox/event 更新 refs、审计和 manifest/version projection；当前完整 worker 流程仍在规划中。
@@ -61,7 +61,7 @@ GET /distribution/marketplaces/{marketplacePublicKey}/marketplace.json
 ```
 
 - public key 必须符合 `{normalized-name}-{8-lowercase-hex}`，是不可变 locator 而不是 credential；
-- resolver 只返回 active immutable snapshot；失败统一为 not found，避免泄露内部状态；
+- resolver 只返回 active ready projection artifact；tag move rebuild 完成后 pointer 可切换到新 artifact，失败统一为 not found；
 - 响应使用 `application/json`、强 ETag、`If-None-Match → 304`、`no-cache` 和 `nosniff`；
 - handler 只读取已发布 bytes，不能在 GET 中构建 draft、写 DB 或修改 projection。
 
@@ -90,7 +90,7 @@ POST /distribution/plugins/{distributionUUID}.git/git-upload-pack
 
 - Marketplace route 只接受 canonical public key；Plugin route 只接受 canonical UUID。
 - `info/refs` 只 allowlist `git-upload-pack`；没有 receive-pack、upload-archive、Dumb HTTP 或任意 write route。
-- resolver 每次只授予一个 kind 匹配的 immutable projection。
+- resolver 每次只授予一个 kind 匹配的 active ready projection artifact。
 - request handler 只能 advertise/read projection，禁止调用 repository init、projection builder、update-ref 或任何 filesystem mutation。
 - `info/refs` 与 `git-upload-pack` 不缓存，并受 body、并发与 timeout 限制。
 - 日志只记录安全的 resource identity、result 和 request ID，不记录 credential、pack body 或完整敏感 URL。
@@ -113,14 +113,14 @@ HTTP JSON 的 Authorization header 不会自动转发给 Plugin Git；Git Creden
 
 ## Marketplace schema 与 source
 
-生成或修改 Marketplace JSON 前必须核对当前官方 Claude Code schema，并以 golden/schema tests 固定已验证行为：
+生成或修改 Marketplace JSON 前核对当前 Claude Code 文档、SchemaStore 格式参考和官方 examples，并以 golden tests 固定已支持行为；MarketplaceServer 不承担通用 Plugin JSON validator：
 
 - 顶层 `name`、`owner`、`plugins` 等字段遵循官方 schema；
 - 直接下载 JSON 不使用 relative Plugin source；
-- Git source 使用官方 `url` 形式、可访问 URL、ref/tag 与完整 distribution SHA；
+- Git source 使用官方 `url` 形式、可访问 URL、selected canonical tag 与当前完整 distribution SHA；
 - 不自创 transport/source 字段；
 - serialization 和 Plugin ordering 稳定；
-- public stable JSON、immutable revision 与 private JSON 使用各自正确的缓存策略；
+- public stable JSON、revision projection 与 private JSON 使用各自正确的缓存策略；
 - HTTP 与 Git Marketplace 必须指向同一 published snapshot。
 
 ## Git SSH — 规划中的目标协议
@@ -131,6 +131,6 @@ HTTP JSON 的 Authorization header 不会自动转发给 Plugin Git；Git Creden
 - 只允许 `session` channel 和 Git exec request；拒绝 shell、PTY、subsystem、port/agent/X11 forwarding 与任意 environment。
 - 只解析严格的 `git-upload-pack '<namespace>/<repo>.git'` 或 `git-receive-pack '<namespace>/<repo>.git'`，转换为枚举 operation 和 repository ID；原始字符串绝不交给 shell。
 - 通过唯一 active public-key fingerprint 定位 user/service account；unknown/revoked key 或 disabled account 在启动 Git 前拒绝。
-- upload/receive 复用 HTTPS 的 repository resolver、authorizer、protected-ref 和 service contract，保证 transport parity。
+- upload/receive 复用 HTTPS 的 Plugin-backed repository resolver、Plugin read/write authorization、protected-ref 和 service contract，保证 transport parity。
 - host key 使用受保护文件/secret mount 持久化；支持安全轮换，并设置 handshake、authentication、idle、command timeout 和并发上限。
 - audit 可以记录 fingerprint/algorithm、actor、repo、action、result 和 session ID，不能记录完整 key 或 pack body。

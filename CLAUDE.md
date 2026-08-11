@@ -19,6 +19,7 @@ MarketplaceServer 是基于 jframe 模块化内核的 Claude Code Plugin 与 Mar
 | [docs/operations.md](docs/operations.md) | 测试、构建、部署、存储、恢复和交付门槛 |
 | [docs/roadmap.md](docs/roadmap.md) | 尚未完成的工作与交付顺序 |
 | [docs/ai-development.md](docs/ai-development.md) | MarketplaceServer 的 Agent 工作流 |
+| [docs/design/README.md](docs/design/README.md) | 通用数据、API contract、ADR 与后续 system design 索引 |
 | [config.example.yaml](config.example.yaml) | 支持的 operator 配置键与安全示例 |
 
 ## 真相与状态
@@ -53,8 +54,8 @@ Identity、authorization、distribution，以及未来的 teams、repositories�
 6. **隔离请求平面。** `/api/v1`、`/git`、`/distribution` 使用独立 handler 与 credential scope；不得通过 User-Agent 或可伪造 header 建立信任。
 7. **Git 实现留在 `git`。** 禁止 shell command 拼接；使用 `exec.CommandContext`、独立参数、最小环境、server-resolved opaque path 与 storage-root containment check。
 8. **不伪装跨系统 ACID。** Git objects/refs 是 repository 内容权威，DB refs/size/latest 是 projection；DB 与 filesystem 通过显式状态、幂等 outbox/event、reconciliation 或补偿协调。
-9. **保持 Plugin/version 不可变。** 一个 repository 只承载一个 Plugin；发布 version 固定完整 content identity、tag 和 manifest snapshot，不能静默改指向；修复发布新版本。
-10. **保持 Marketplace publication 可复现。** draft 可变，published revision/projection 不可变；stable route 只切换到已验证 projection；public key 与 distribution UUID 是 locator，不是 credential。
+9. **保持 Plugin 与 tag authority。** Plugin 是唯一 user-facing resource，隐藏 repository 与其一对一；发布只选择 canonical `v`-prefixed SemVer tag，manifest version 不作为 identity；tag 移动更新同一 logical version，但必须先通过 protected receive validation 和所有引用 revision 的 prebuild。
+10. **保持 Marketplace revision 配置可追踪。** draft 可变，published revision 保留不可修改的 Plugin+tag selection；projection artifact 可在 tag 移动时重建并切换。Git-ref/DB-pointer failure 尚未设计完成前不得实现或宣称跨系统原子性；public key 与 distribution UUID 是 locator，不是 credential。
 11. **分发请求绝对只读。** distribution handler 不能 init repository、build projection、update ref、注册 receive-pack 或修改开发 repository/active projection。
 12. **保护 secret。** 不存储或记录 plaintext password/token、Authorization、private key、secret-bearing URL、pack body、server filesystem path 或 private runtime config；撤销和当前授权在下一请求生效。
 13. **以官方 Marketplace schema 为准。** 修改 `marketplace.json` 字段前核对当前官方 schema；不猜 source type/兼容字段；直接 URL 索引不使用 relative Plugin source，Git source 使用官方 `url` 形式和固定 SHA。
@@ -69,5 +70,7 @@ Identity、authorization、distribution，以及未来的 teams、repositories�
 - 修改 module wiring 或 contract：读 [架构](docs/architecture.md) 与 [DI 参考](docs/di-reference.md)。
 - 修改 identity、authorization、publication 或 persistence：读 [产品不变量](docs/product-invariants.md)。
 - 修改 HTTP、Git 或 distribution：读 [协议](docs/protocols.md)。
+- 设计或修改会影响产品行为、用户/团队/企业隔离、Marketplace 组合或交付范围的能力：先读 [项目目标](docs/project-goals.md)，再读对应设计文档、源码和 tests。
 - 设计未来 slice：读 [路线图](docs/roadmap.md)，但仍以当前代码为起点，不创建空模块冒充进度。
+- 非平凡变更的设计批准、Agent 独占归属、TDD 和 feature commit 规则：遵循 [Agent 开发工作流](docs/ai-development.md)。
 - 完成变更：按 [运维、测试与交付](docs/operations.md) 运行适用检查并同步文档。

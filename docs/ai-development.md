@@ -6,12 +6,13 @@
 
 1. 读 [CLAUDE.md](../CLAUDE.md) 获取索引和不可违反规则。
 2. 读 [当前实现状态](current-state.md)，确认目标能力是已实现、基础能力还是规划中。
-3. 按修改类型读取：
+3. 产品行为、用户/团队/企业隔离、Marketplace 组合、authorization 或架构设计还必须读 [项目目标](project-goals.md)，确认实现服务于既定用户与产品结果。
+4. 按修改类型读取：
    - wiring/DI/lifecycle： [架构](architecture.md) + [DI 参考](di-reference.md)；
    - identity/auth/publication/data： [产品不变量](product-invariants.md)；
    - HTTP/Git/distribution： [协议](protocols.md)；
    - build/deployment/testing： [运维](operations.md)。
-4. 再读取目标源码与 tests；设计文档不能代替当前代码证据。
+5. 再读取目标源码与 tests；设计文档不能代替当前代码证据。
 
 ## 先决定修改归属
 
@@ -30,30 +31,36 @@ MarketplaceServer 的顶层模块固定为 `jin`、`sql`、`git`、`backend`、`
 
 - 用代码、route registration、migration 和 tests 核实当前状态；
 - 检查已有 contract/service，优先复用而不是创建平行抽象；
-- 识别 tenant、authorization、secret、Git path 和 immutable publication 边界；
+- 识别 tenant、authorization、secret、Git path、tag authority 与 projection rebuild 边界；
 - 对照 roadmap，但不要创建空 package 或 future endpoint 冒充进度。
 
 ### 2. 设计
 
-非平凡修改先给出可执行计划：
+只读调查可以在批准前进行。非平凡修改必须先给出可执行设计：
 
 - 修改属于哪个现有模块/内部领域；
 - lifecycle 中何时 Map/Load；
 - 是否需要新增窄跨模块 contract；
 - DB、Git filesystem 和 publication 是否涉及跨系统一致性；
 - allow/deny、failure、real-client 与 migration tests；
-- 哪些文档是该事实的唯一权威位置。
+- 哪些文档是该事实的唯一权威位置；
+- 独立 feature commit 的边界。
+
+改变架构、依赖、公开 contract 或实现方向时，设计必须包含选项、trade-off 和推荐方案，并在编辑实现文件前获得用户明确批准。继续讨论不等于批准；需求或方案发生实质变化后应重新确认。
 
 仅在确实设计新的 jframe 模块或改变模块拓扑时使用 `jframe-module-design`；普通 backend domain 工作不要套用“新 feature = 新 module”。在现有模块内部实现时可使用 `jframe-module-dev`，但必须以本仓库 architecture/invariants 为准。
 
 ### 3. 实现
 
 - 先读后改，不跨模块访问内部 DAO/model；
+- 新行为和 bug fix 在实现前先定义 focused failing、regression 或 acceptance tests，默认采用 red-green-refactor；文档-only 或无法先接入测试的例外必须在已批准设计中说明；
+- 多 Agent 并行时预先按 package、文件或 concern 分配互不重叠的编辑归属；可以共同读取 shared code，但同一 shared file 同时只能有一个编辑 owner，cross-cutting 修改由明确 owner 串行整合；
 - handler 只处理协议，service 负责授权和业务 transaction；
 - 所有 `hub.Load` 检查 error，Config 保持双 tag；
 - Git 命令使用 context-bound subprocess 与独立参数；
 - 高风险状态变化、tenant scope 和 secret handling 同步写 deny tests；
-- 不手工编辑 frontend dist，不顺手重构无关 jframe 源码。
+- 不手工编辑 frontend dist，不顺手重构无关 jframe 源码；
+- 每个批准的 feature slice 形成 cohesive、可独立 review 和验证的新 commit；不混入无关重构、generated noise 或其他 Agent 的未审查工作，不 amend、不跳过 hooks。必须拆成依赖 commits 时，每个 commit 都保持可构建、可测试并说明依赖。
 
 ### 4. 验证
 
@@ -107,7 +114,7 @@ MarketplaceServer 使用 `github.com/juanjiTech/jin`，不是 gin：
 - 所有 hub.Load 检查 error；Config 双 tag；Stop defer wg.Done()
 - namespace query 与 authorization 默认拒绝，必须有 deny tests
 - Git 不经 shell，路径限制在 storage root
-- published version/revision/projection 不可变，distribution handler 只读
+- published revision 的 Plugin+tag configuration 不可修改；tag-driven version/projection 按 owning design rebuild，distribution handler 始终只读
 - secret 不进入日志、URL、前端 bundle 或示例配置
 - 只更新事实对应的唯一权威文档，不把 roadmap 写成当前能力
 ```

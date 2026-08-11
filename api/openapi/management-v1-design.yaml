@@ -1,0 +1,1336 @@
+openapi: 3.1.0
+info:
+  title: MarketplaceServer Management API Design
+  version: 1.0.0-proposed
+  description: |
+    Proposed management API contract. Operations in this document are design
+    targets and are not evidence that routes, handlers, persistence, or frontend
+    flows are deployed. Deployed behavior is documented separately in
+    `management-v1.yaml`.
+
+    Git Smart HTTP, distribution endpoints, and Claude Code `marketplace.json`
+    are separate request-plane contracts.
+  license:
+    name: MIT
+    identifier: MIT
+  x-document-status: proposed
+  x-runtime-availability: not-guaranteed
+jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
+servers:
+  - url: /
+
+tags:
+  - name: Authentication
+    description: Frontend password login and JWT issuance.
+  - name: Health
+    description: Management-plane process health.
+  - name: Personal access tokens
+    description: Current-user CLI and automation credentials.
+  - name: Plugins
+    description: User-facing Plugins backed by hidden one-to-one Git repositories.
+  - name: Plugin versions
+    description: Canonical tag-driven Plugin publication.
+  - name: Marketplaces
+    description: Marketplace templates and mutable Plugin-tag drafts.
+  - name: Marketplace revisions
+    description: Retained Plugin-tag configurations and stable activation.
+  - name: Distribution credentials
+    description: Per-user, per-Marketplace installation credentials.
+
+paths:
+  /api/v1/auth/login:
+    post:
+      operationId: login
+      tags: [Authentication]
+      summary: Sign in to the management frontend
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: A fixed 30-day frontend JWT was issued.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+            Cache-Control:
+              $ref: "#/components/headers/NoStore"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginSuccess"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/health:
+    get:
+      operationId: getManagementHealth
+      tags: [Health]
+      summary: Get management-plane health
+      security: []
+      responses:
+        "200":
+          description: Management-plane health.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthSuccess"
+
+  /api/v1/me/tokens:
+    get:
+      operationId: listPersonalAccessTokens
+      tags: [Personal access tokens]
+      summary: List the current user's personal access tokens
+      security:
+        - BearerJWT: []
+        - BasicPAT: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: Exact owner-scoped token page.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPageSuccess"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    post:
+      operationId: createPersonalAccessToken
+      tags: [Personal access tokens]
+      summary: Create a personal access token
+      security:
+        - BearerJWT: []
+        - BasicPAT: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTokenRequest"
+      responses:
+        "201":
+          description: Token created; plaintext is disclosed only once.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+            Cache-Control:
+              $ref: "#/components/headers/NoStore"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreatedTokenSuccess"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/me/tokens/{tokenId}:
+    parameters:
+      - $ref: "#/components/parameters/TokenId"
+    delete:
+      operationId: revokePersonalAccessToken
+      tags: [Personal access tokens]
+      summary: Revoke an owner-scoped personal access token
+      security:
+        - BearerJWT: []
+        - BasicPAT: []
+      responses:
+        "204":
+          description: Token revoked; response body is empty.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/namespaces/{namespace}/plugins:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+    get:
+      operationId: listPlugins
+      tags: [Plugins]
+      summary: List readable Plugins in a namespace
+      security:
+        - BearerJWT: []
+        - BasicPAT: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: Stable namespace-scoped Plugin page.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginPageSuccess"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+    post:
+      operationId: createPlugin
+      tags: [Plugins]
+      summary: Create a Plugin and its hidden Git repository
+      description: |
+        The request accepts only the lowercase kebab-case Plugin name. The name
+        is also the immutable Plugin slug and Git path. The server generates IDs,
+        storage placement, and clone URL; new Plugins are public by default.
+      security:
+        - BearerJWT: []
+        - BasicPAT: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePluginRequest"
+      responses:
+        "201":
+          description: Plugin and hidden repository created atomically.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginSuccess"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+
+  /api/v1/namespaces/{namespace}/plugins/{plugin}:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+      - $ref: "#/components/parameters/PluginSlug"
+    get:
+      operationId: getPlugin
+      tags: [Plugins]
+      summary: Get Plugin metadata
+      security:
+        - {}
+        - BearerJWT: []
+        - BasicPAT: []
+      responses:
+        "200":
+          description: Plugin metadata. Public Plugins may be read anonymously.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginSuccess"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deletePlugin
+      tags: [Plugins]
+      summary: Delete or enter the approved deletion lifecycle for a Plugin
+      description: Exact recovery and physical Git deletion semantics require the Plugin system design.
+      security:
+        - BearerJWT: []
+        - BasicPAT: []
+      responses:
+        "204":
+          description: Plugin deletion command accepted synchronously; no body.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /api/v1/namespaces/{namespace}/plugins/{plugin}/versions:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+      - $ref: "#/components/parameters/PluginSlug"
+    get:
+      operationId: listPluginVersions
+      tags: [Plugin versions]
+      summary: List published tag-driven Plugin versions
+      security:
+        - {}
+        - BearerJWT: []
+        - BasicPAT: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: Stable version page; stable SemVer precedes prerelease selection.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginVersionPageSuccess"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/namespaces/{namespace}/plugins/{plugin}/versions:publish:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+      - $ref: "#/components/parameters/PluginSlug"
+    post:
+      operationId: publishPluginVersion
+      tags: [Plugin versions]
+      summary: Publish an existing canonical v-prefixed SemVer tag
+      description: |
+        The tag is the version-content authority. Manifest version is ignored.
+        Protected tag receive validation is owned by the Plugin Git workflow.
+        Moving the tag updates the same logical version and triggers rebuilds of
+        every Marketplace revision that references Plugin plus tag.
+      security:
+        - BearerJWT: []
+        - BasicPAT: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PublishPluginVersionRequest"
+      responses:
+        "201":
+          description: Existing unpublished tag selected as a published version.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginVersionSuccess"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+
+  /api/v1/namespaces/{namespace}/plugins/{plugin}/versions/{tag}:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+      - $ref: "#/components/parameters/PluginSlug"
+      - $ref: "#/components/parameters/TagName"
+    get:
+      operationId: getPluginVersion
+      tags: [Plugin versions]
+      summary: Get the current content identity for a published tag
+      security:
+        - {}
+        - BearerJWT: []
+        - BasicPAT: []
+      responses:
+        "200":
+          description: Current tag-driven version state.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginVersionSuccess"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/namespaces/{namespace}/marketplaces:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+    get:
+      operationId: listMarketplaces
+      tags: [Marketplaces]
+      summary: List Marketplace templates in a namespace
+      security:
+        - BearerJWT: []
+        - BasicPAT: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: Stable namespace-scoped Marketplace page.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketplacePageSuccess"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      operationId: createMarketplace
+      tags: [Marketplaces]
+      summary: Create a Marketplace template
+      security:
+        - BearerJWT: []
+        - BasicPAT: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMarketplaceRequest"
+      responses:
+        "201":
+          description: Marketplace template created with an empty draft.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketplaceSuccess"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+
+  /api/v1/namespaces/{namespace}/marketplaces/{marketplace}:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+      - $ref: "#/components/parameters/MarketplaceSlug"
+    get:
+      operationId: getMarketplace
+      tags: [Marketplaces]
+      summary: Get a Marketplace template and current draft
+      security:
+        - BearerJWT: []
+        - BasicPAT: []
+      responses:
+        "200":
+          description: Marketplace template and Plugin-tag draft selection.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketplaceSuccess"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      operationId: replaceMarketplaceDraft
+      tags: [Marketplaces]
+      summary: Replace the mutable Plugin-tag draft selection
+      security:
+        - BearerJWT: []
+        - BasicPAT: []
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplaceMarketplaceDraftRequest"
+      responses:
+        "200":
+          description: Draft replaced.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketplaceSuccess"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+    delete:
+      operationId: deleteMarketplace
+      tags: [Marketplaces]
+      summary: Delete or archive a Marketplace template
+      security:
+        - BearerJWT: []
+        - BasicPAT: []
+      responses:
+        "204":
+          description: Marketplace deletion command completed; no body.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /api/v1/namespaces/{namespace}/marketplaces/{marketplace}:publish:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+      - $ref: "#/components/parameters/MarketplaceSlug"
+    post:
+      operationId: publishMarketplaceRevision
+      tags: [Marketplace revisions]
+      summary: Publish the current Plugin-tag draft as a revision
+      description: |
+        A revision retains an immutable ordered Plugin plus tag configuration.
+        Its generated projections follow the tags' current SHAs and are rebuilt
+        when a selected tag moves. The unresolved Git-ref/database-pointer
+        failure boundary blocks implementation of this workflow.
+      security:
+        - BearerJWT: []
+        - BasicPAT: []
+      responses:
+        "201":
+          description: Revision configuration published and selected as stable.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketplaceRevisionSuccess"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+
+  /api/v1/namespaces/{namespace}/marketplaces/{marketplace}/revisions:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+      - $ref: "#/components/parameters/MarketplaceSlug"
+    get:
+      operationId: listMarketplaceRevisions
+      tags: [Marketplace revisions]
+      summary: List retained Marketplace revision configurations
+      security:
+        - BearerJWT: []
+        - BasicPAT: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: Stable revision page.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketplaceRevisionPageSuccess"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/namespaces/{namespace}/marketplaces/{marketplace}/revisions/{revisionId}:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+      - $ref: "#/components/parameters/MarketplaceSlug"
+      - $ref: "#/components/parameters/RevisionId"
+    get:
+      operationId: getMarketplaceRevision
+      tags: [Marketplace revisions]
+      summary: Get a retained Plugin-tag revision configuration
+      security:
+        - BearerJWT: []
+        - BasicPAT: []
+      responses:
+        "200":
+          description: Revision configuration and current projection state.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketplaceRevisionSuccess"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/namespaces/{namespace}/marketplaces/{marketplace}/revisions/{revisionId}:activate:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+      - $ref: "#/components/parameters/MarketplaceSlug"
+      - $ref: "#/components/parameters/RevisionId"
+    post:
+      operationId: activateMarketplaceRevision
+      tags: [Marketplace revisions]
+      summary: Switch stable distribution to an existing revision
+      description: Historical revisions are expected to have current rebuilt projections for their selected tags.
+      security:
+        - BearerJWT: []
+        - BasicPAT: []
+      responses:
+        "200":
+          description: Stable selection switched to the requested revision.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketplaceRevisionSuccess"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /api/v1/namespaces/{namespace}/marketplaces/{marketplace}/credentials:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+      - $ref: "#/components/parameters/MarketplaceSlug"
+    get:
+      operationId: listDistributionCredentials
+      tags: [Distribution credentials]
+      summary: List the current user's credentials for one Marketplace
+      security:
+        - BearerJWT: []
+        - BasicPAT: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: Metadata-only credential page.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DistributionCredentialPageSuccess"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      operationId: createDistributionCredential
+      tags: [Distribution credentials]
+      summary: Create a per-user, per-Marketplace distribution credential
+      security:
+        - BearerJWT: []
+        - BasicPAT: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDistributionCredentialRequest"
+      responses:
+        "201":
+          description: Credential created; plaintext password is disclosed once.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+            Cache-Control:
+              $ref: "#/components/headers/NoStore"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreatedDistributionCredentialSuccess"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+
+  /api/v1/namespaces/{namespace}/marketplaces/{marketplace}/credentials/{credentialId}:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+      - $ref: "#/components/parameters/MarketplaceSlug"
+      - $ref: "#/components/parameters/CredentialId"
+    delete:
+      operationId: revokeDistributionCredential
+      tags: [Distribution credentials]
+      summary: Revoke an owner-scoped distribution credential
+      security:
+        - BearerJWT: []
+        - BasicPAT: []
+      responses:
+        "204":
+          description: Credential revoked; no body.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  securitySchemes:
+    BearerJWT:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Frontend HS256 JWT; authorization and auth_version are checked on every request.
+    BasicPAT:
+      type: http
+      scheme: basic
+      description: CLI/automation uses username in the Basic username slot and PAT in the password slot.
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    Size:
+      name: size
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    Namespace:
+      name: namespace
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/Slug"
+    PluginSlug:
+      name: plugin
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/Slug"
+    MarketplaceSlug:
+      name: marketplace
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/Slug"
+    TagName:
+      name: tag
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/CanonicalVersionTag"
+    TokenId:
+      name: tokenId
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/UUID"
+    RevisionId:
+      name: revisionId
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/UUID"
+    CredentialId:
+      name: credentialId
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/UUID"
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      schema:
+        type: string
+
+  headers:
+    RequestId:
+      required: true
+      description: Opaque request correlation identifier.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    NoStore:
+      required: true
+      schema:
+        type: string
+        const: private, no-store
+    ETag:
+      required: true
+      schema:
+        type: string
+
+  responses:
+    Unauthenticated:
+      description: Authentication is missing, invalid, expired, or revoked.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/RequestId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: The current principal is not authorized for this action and resource.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/RequestId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: The scoped resource was not found or is intentionally not disclosed.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/RequestId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: The resource state, version, or unique identity conflicts with the command.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/RequestId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ValidationFailed:
+      description: Request syntax or business input is invalid.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/RequestId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    RateLimited:
+      description: Authentication attempts are temporarily rate limited.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/RequestId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    InternalError:
+      description: Internal failure without implementation detail disclosure.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/RequestId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    UUID:
+      type: string
+      format: uuid
+      pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    Timestamp:
+      type: string
+      format: date-time
+    Slug:
+      type: string
+      pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    CommitSHA:
+      type: string
+      pattern: "^[0-9a-f]{40}$"
+    CanonicalVersionTag:
+      type: string
+      pattern: "^v(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+      description: Canonical v-prefixed SemVer tag.
+
+    Error:
+      type: object
+      required: [code, message, requestId]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        requestId:
+          type: string
+        details:
+          description: Optional safe structured validation or conflict details.
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 1
+        password:
+          type: string
+          minLength: 1
+          writeOnly: true
+    LoginResult:
+      type: object
+      required: [username, token, expiresAt]
+      properties:
+        username:
+          type: string
+        token:
+          type: string
+          writeOnly: true
+          description: Fixed 30-day HS256 frontend JWT.
+        expiresAt:
+          $ref: "#/components/schemas/Timestamp"
+    LoginSuccess:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/LoginResult"
+
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, error]
+    HealthSuccess:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/Health"
+
+    TokenMetadata:
+      type: object
+      required: [id, name, scopes, createdAt]
+      properties:
+        id:
+          $ref: "#/components/schemas/UUID"
+        name:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        expiresAt:
+          oneOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
+        lastUsedAt:
+          oneOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
+        revokedAt:
+          oneOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
+        createdAt:
+          $ref: "#/components/schemas/Timestamp"
+    CreateTokenRequest:
+      type: object
+      required: [name, scopes]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+        scopes:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+        expiresAt:
+          oneOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
+    CreatedToken:
+      allOf:
+        - $ref: "#/components/schemas/TokenMetadata"
+        - type: object
+          required: [token]
+          properties:
+            token:
+              type: string
+              writeOnly: true
+              description: One-time plaintext PAT.
+    CreatedTokenSuccess:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/CreatedToken"
+
+    Plugin:
+      type: object
+      required: [id, namespace, name, visibility, cloneUrl, createdAt]
+      properties:
+        id:
+          $ref: "#/components/schemas/UUID"
+        namespace:
+          $ref: "#/components/schemas/Slug"
+        name:
+          $ref: "#/components/schemas/Slug"
+        visibility:
+          type: string
+          enum: [public, private]
+          description: New Plugins default to public; a later Plugin design may authorize visibility changes.
+        cloneUrl:
+          type: string
+          format: uri
+          description: Server-generated development Git URL; repository internals are hidden.
+        createdAt:
+          $ref: "#/components/schemas/Timestamp"
+    CreatePluginRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          $ref: "#/components/schemas/Slug"
+    PluginSuccess:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/Plugin"
+
+    PluginVersion:
+      type: object
+      required: [pluginId, tag, version, commitSha, publishedAt]
+      properties:
+        pluginId:
+          $ref: "#/components/schemas/UUID"
+        tag:
+          $ref: "#/components/schemas/CanonicalVersionTag"
+        version:
+          type: string
+          description: SemVer text derived from the tag without the v prefix.
+        commitSha:
+          $ref: "#/components/schemas/CommitSHA"
+        publishedAt:
+          $ref: "#/components/schemas/Timestamp"
+    PublishPluginVersionRequest:
+      type: object
+      required: [tag]
+      properties:
+        tag:
+          $ref: "#/components/schemas/CanonicalVersionTag"
+    PluginVersionSuccess:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/PluginVersion"
+
+    MarketplaceSelection:
+      type: object
+      required: [pluginId, tag]
+      properties:
+        pluginId:
+          $ref: "#/components/schemas/UUID"
+        tag:
+          $ref: "#/components/schemas/CanonicalVersionTag"
+    Marketplace:
+      type: object
+      required: [id, namespace, name, publicKey, draft, createdAt, updatedAt]
+      properties:
+        id:
+          $ref: "#/components/schemas/UUID"
+        namespace:
+          $ref: "#/components/schemas/Slug"
+        name:
+          $ref: "#/components/schemas/Slug"
+        publicKey:
+          type: string
+          pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*-[0-9a-f]{8}$"
+        draft:
+          type: array
+          items:
+            $ref: "#/components/schemas/MarketplaceSelection"
+        stableRevisionId:
+          oneOf:
+            - $ref: "#/components/schemas/UUID"
+            - type: "null"
+        createdAt:
+          $ref: "#/components/schemas/Timestamp"
+        updatedAt:
+          $ref: "#/components/schemas/Timestamp"
+    CreateMarketplaceRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          $ref: "#/components/schemas/Slug"
+    ReplaceMarketplaceDraftRequest:
+      type: object
+      required: [plugins]
+      properties:
+        plugins:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/MarketplaceSelection"
+    MarketplaceSuccess:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/Marketplace"
+
+    MarketplaceRevision:
+      type: object
+      required: [id, marketplaceId, plugins, projectionState, createdAt]
+      properties:
+        id:
+          $ref: "#/components/schemas/UUID"
+        marketplaceId:
+          $ref: "#/components/schemas/UUID"
+        plugins:
+          type: array
+          items:
+            $ref: "#/components/schemas/MarketplaceSelection"
+        projectionState:
+          type: string
+          enum: [building, ready, failed]
+          description: Derived projection state; revision Plugin-tag configuration is retained.
+        createdAt:
+          $ref: "#/components/schemas/Timestamp"
+    MarketplaceRevisionSuccess:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/MarketplaceRevision"
+
+    DistributionCredential:
+      type: object
+      required: [id, name, username, marketplaceId, createdAt]
+      properties:
+        id:
+          $ref: "#/components/schemas/UUID"
+        name:
+          type: string
+        username:
+          type: string
+          description: Non-secret Marketplace credential username.
+        marketplaceId:
+          $ref: "#/components/schemas/UUID"
+        expiresAt:
+          oneOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
+        revokedAt:
+          oneOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
+        createdAt:
+          $ref: "#/components/schemas/Timestamp"
+    CreateDistributionCredentialRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+        expiresAt:
+          oneOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
+    CreatedDistributionCredential:
+      allOf:
+        - $ref: "#/components/schemas/DistributionCredential"
+        - type: object
+          required: [password]
+          properties:
+            password:
+              type: string
+              format: uuid
+              writeOnly: true
+              description: One-time plaintext distribution password.
+    CreatedDistributionCredentialSuccess:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/CreatedDistributionCredential"
+
+    PageMeta:
+      type: object
+      required: [page, size, total]
+      properties:
+        page:
+          type: integer
+          minimum: 1
+        size:
+          type: integer
+          minimum: 1
+          maximum: 100
+        total:
+          type: integer
+          minimum: 0
+    TokenPageData:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/TokenMetadata"
+    PluginPageData:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/Plugin"
+    PluginVersionPageData:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/PluginVersion"
+    MarketplacePageData:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/Marketplace"
+    MarketplaceRevisionPageData:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/MarketplaceRevision"
+    DistributionCredentialPageData:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/DistributionCredential"
+
+    TokenPageSuccess:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/TokenPageData"
+    PluginPageSuccess:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/PluginPageData"
+    PluginVersionPageSuccess:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/PluginVersionPageData"
+    MarketplacePageSuccess:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/MarketplacePageData"
+    MarketplaceRevisionPageSuccess:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/MarketplaceRevisionPageData"
+    DistributionCredentialPageSuccess:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/DistributionCredentialPageData"

@@ -36,56 +36,45 @@
 
 高风险 action（删除、转移、protected ref、发布）即使通过角色检查，仍需资源规则二次判定。
 
-## Repository 与 Plugin
+## Plugin 与隐藏 Git repository
 
-- 一个托管 repository 只承载一个 Plugin，Plugin 与 repository 一对一。
-- bare Git repository 中的 objects/refs 是内容权威来源；数据库保存归属、权限、展示信息和可重建投影，不复制完整 Git 对象。
-- repository slug 只在 namespace 中唯一；物理路径只使用服务端生成的 opaque ID/storage key。
-- Plugin 可发布 commit 必须包含有效 `.claude-plugin/plugin.json`；manifest 必须从服务端解析的 commit 读取，不能接受客户端声称的 snapshot。
-- Plugin visibility 不能高于 repository 可读性。
-- 删除默认先软删除或进入回收状态；物理删除 Git 数据是独立、可取消、可审计的高风险操作。
-- push 后的 ref、size 和 manifest metadata 通过幂等事件/reconciliation 更新；不得把 DB projection 当成 Git 权威。
+- Plugin 是唯一 user-facing resource；创建只接受 lowercase kebab-case `name`，默认 public，并原子创建隐藏的一对一 Git repository。
+- Plugin name 同时是 immutable slug/Git path；Plugin ID、repository ID、storage key、filesystem path 和 clone URL 由服务端管理。
+- Plugin read authorization 同时控制 metadata read 与 repository clone/fetch；Plugin write authorization 单独控制 push。Repository 没有独立 management CRUD 或独立产品权限。
+- bare Git repository 中的 objects/refs 是内容权威；数据库只保存归属、权限和可重建 projection metadata。
+- protected default branch 和 tags 在 live bare repository 之外导出 proposed commit 后验证。Default branch 运行 `claude plugin validate` 并允许 warning；tag 使用 `--strict`。两者都要求 manifest name 与 Plugin name 精确、区分大小写一致。
+- ordinary development branch 可以包含中间状态，不强制 Plugin validation。
+- 删除先进入 owning Plugin lifecycle；物理 Git 删除是单独的高风险运维行为。
 
-## Plugin version
+## Tag-driven Plugin version
 
-- Git content identity 必须固定为完整、不可变的 SHA；SemVer 通常映射到受保护 tag。
-- 同一 Plugin 的 version 和发布 tag 分别唯一。
-- 发布记录至少固定 Plugin、version、tag/ref、完整 SHA、manifest snapshot/digest、发布者和时间。
-- 已发布 version、tag、SHA 与 manifest snapshot 不可修改；修复必须发布新版本。
-- branch 是开发状态，不是可复现安装版本。Marketplace revision 只能引用已发布版本或明确固定的 commit。
-- yank/revoke 改变可安装状态但不篡改历史；旧 revision 是否继续下载由显式安全策略决定。
-- source tag 漂移只产生 integrity violation 与告警，不能静默更新已发布记录或 distribution。
-
-### 目标版本状态机 — 规划中
-
-```text
-validating → published → yanked
-     │
-     └──────→ rejected
-```
-
-`rejected` 只保存安全错误码/摘要，不保存可能含敏感数据的原始输入。发布 transaction 必须使用唯一约束解决并发竞态，并记录状态事件。
+- 发布只选择一个已存在、尚未发布的 canonical `v`-prefixed SemVer tag；manifest `version` 不作为发布 identity。
+- 同一 Plugin 的 canonical tag 对应一个 logical version；tag 的当前 full commit SHA 是该 version 内容权威。
+- tag 从 SHA-A 移到 SHA-B 时，同一 version 更新到 SHA-B，不创建新 version，也不自动 yank。
+- protected tag update 必须先通过 strict Claude Plugin validation、exact name check，以及所有引用该 Plugin+tag 的 revision projection prebuild；任何失败都拒绝 push。
+- branch 只用于 development，不是 installable version。
+- latest 优先最高 stable SemVer；只有不存在 stable 时才选择最高 prerelease。
+- periodic reconciliation 可以发现绕过 receive policy 的 drift，并进入显式 operator recovery；不能假装 DB 和 Git ref 是一个 transaction。
 
 ## Marketplace template、revision 与 public key
 
-- Marketplace 是 Plugin 的组合视图，不是新的 Plugin 开发 repository。
-- 每个 template 的 draft 独立；不同方案的 Plugin 集合、排序和 selector 不能互相污染。
+- Marketplace 是 Plugin 的组合视图，不是 Plugin repository。
+- 每个 template 的 draft 独立，保存有序 Plugin+tag selection。
 - `marketplacePublicKey` 在 Marketplace 首次创建时生成，格式为 `{normalized-name}-{8-lowercase-hex}`，全局唯一、持久化且改名后不变。
-- public key 和 distribution UUID 都是 locator，不是 credential；internal ID、FK 和 projection pointer 继续使用 UUID。
-- draft 可变；published revision 和 projection 不可变。
-- publish 必须把 selector 解析为精确 Plugin version 与 content identity，校验 manifest/source，稳定序列化并保存快照。
-- stable URL 只在显式 publish/rollback 后切换到一个已验证的 immutable projection；不能在 GET 时根据浮动 branch 动态重算。
-- rollback 复用已验证历史 projection 并切换 pointer，不复制、重建或原地修改旧快照。
-- superseded revision 仍可复现；只有显式安全事件可以 revoke。被撤回内容不能由其他版本冒充。
+- public key 和 distribution UUID 是 locator，不是 credential；internal ID、FK 和 projection pointer 可继续使用 UUID。
+- published revision 保留不可修改的 Plugin+tag configuration；其 projection bytes 不是历史冻结内容，会在 selected tag 移动时重建。
+- tag push 必须为每个引用 revision 在 quarantine 中构建新 immutable projection artifact；全部成功后才允许进入后续 ref/pointer switch 流程。
+- stable route 只读取 ready projection。GET 不能 build、update ref、切换 pointer 或修改 development repository。
+- rollback/activate 直接切换到已有 revision；该 revision 应已针对所有 selected tags 的当前 SHA 完成 rebuild。
+- Git ref 已更新而 DB/version/revision projection pointers 未成功切换的 failure semantics 尚未解决；在单独设计批准前，此 workflow 阻塞 production implementation，禁止伪装 cross-system ACID。
 
-### Immutable Plugin distribution
+### Plugin distribution
 
-- `(Marketplace, Plugin, PluginVersion)` 对应独立、只读的 distribution identity；同一 Marketplace 的 revision 重复引用同一 version 时复用该 identity。
-- 每个 distribution 只暴露发布时确认的单个 tag，不提供 receive-pack、upload-archive、Dumb HTTP 或未知 service。
-- projection 必须与开发 repository 隔离；hideRefs 或 namespace 不是 object 隔离边界。
-- builder 只读解析 source tag，在 quarantine 构建新 projection，验证后原子移动；active projection 永远不原地写入。
-- Plugin snapshot 从发布 tree 生成无父级 distribution commit 和同名 lightweight tag；Marketplace `source.sha` 使用 distribution SHA，避免泄露 source ancestry。
-- source tag 类型、可选 annotated tag object ID、peeled source commit SHA、tree SHA 与 distribution SHA 应分别保存，以支持审计与完整性验证。
+- `(Marketplace, Plugin, selected tag)` 对应独立、只读的 Plugin distribution identity；同一 Marketplace 的 revision 重复引用相同 Plugin+tag 时可复用 identity。
+- 每个 distribution 只暴露 selected tag，不提供 receive-pack、upload-archive、Dumb HTTP 或未知 service。
+- 每次 build 产生隔离、不可原地修改的 projection artifact；tag move 通过构建并切换到新 artifact 应用，不改写旧 artifact。
+- projection 与 development repository objects/history 隔离；Marketplace `source.sha` 使用当前 distribution SHA。
+- source tag、source commit/tree identity、distribution SHA 和 build time 分别记录，以支持诊断和 reconciliation。
 
 ## Marketplace JSON
 
@@ -115,7 +104,7 @@ validating → published → yanked
 数据库 transaction 只覆盖数据库状态。Git refs、objects 和 filesystem 通过显式状态、outbox/event、幂等 worker、reconciliation 或补偿协调，不得宣称跨系统 ACID。
 
 - receive-pack 成功应产生唯一 push/event identity，消费者幂等更新 DB projection。
-- reconciliation 可以重建安全投影，但不能破坏性“修复”缺失目录、孤立目录或发布 tag 漂移；这些情况需要高优先级告警。
+- reconciliation 可以检测 tag/current-SHA 与 DB/projection pointer 不一致并重建新 artifact，但不能在未定义 failure semantics 时静默移动 Git ref、删除旧 artifact 或假装完成原子切换；不确定状态需要高优先级告警和人工恢复。
 - worker 至少一次执行，使用 lease/heartbeat、有限指数退避与 dead-letter/人工处理；不能假设事件只处理一次。
 - audit action 使用稳定枚举；metadata 脱敏，不保存 password、token、Authorization、完整 key、packfile 或 secret-bearing manifest。
 - 高风险控制面 mutation 的 audit/outbox 需要与业务状态同事务；写失败应使 mutation 失败。
@@ -139,9 +128,9 @@ published revision --security action--> revoked
 
 ## 数据库通用规则
 
-- 外键、唯一性和不可变字段由数据库强制，不只依赖 service check。
+- 外键和唯一性优先通过 GORM tags/AutoMigrate 建立；其他 lifecycle/immutability 规则由 owning system 选择 service、Git policy 或数据库约束并用 deny tests 证明。
 - 需要软删除的资源使用明确 `deleted_at` 或状态；不可变事件不软删除。
 - JSON 字段只承载边缘 metadata/snapshot，不替代可查询且有关联约束的核心列。
-- 列表必须 tenant-scoped 且有界分页；cursor 不暴露未签名内部查询状态。
+- 列表必须 tenant-scoped 且使用有界 page/size；management API 返回 exact filtered total 和稳定服务端排序。
 - URL、namespace、slug、ref、tag、UUID 和 filesystem path 分别校验，不共享一个宽松正则。
 - 所有 mutation 接受 `context.Context` 并支持 timeout/cancellation。
