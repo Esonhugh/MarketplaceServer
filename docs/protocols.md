@@ -19,7 +19,7 @@
 
 管理 JSON API 固定使用 `/api/v1`：
 
-- 错误响应至少包含稳定 `code`、用户可理解的 `message` 与 `requestId`，不返回内部 stack；
+- 错误响应至少包含稳定 `code`、用户可理解的 `message` 与框架 ULID `requestId`，并返回相同 `X-Request-Id`；success/204 是否携带 request ID 由 operation contract 定义，不返回内部 stack；
 - 创建成功使用 `201`，异步命令 `202`，无 body 删除 `204`，并发冲突 `409`，业务校验 `422`，限流 `429`；
 - target list 使用 `page`/`size`，默认 `1`/`20`、最大 size `100`，并返回 exact filtered `total`；已部署 PAT cursor list 仍按 deployed OpenAPI 描述，等待单独迁移；
 - 可变资源应提供 ETag/version，并通过 `If-Match` 防止覆盖并发更新；
@@ -44,7 +44,7 @@ POST /git/{namespace}/{repo}.git/git-receive-pack
 
 1. 严格解析 namespace/repository，去除一个预期 `.git` suffix，拒绝 NUL、编码斜杠、`..`、重复 separator 和非法 slug。
 2. allowlist `git-upload-pack`/`git-receive-pack`；未知 service 不传给 Git。
-3. 解析 Basic/API credential 为 Principal，不记录 Authorization。
+3. 只解析 Basic username+PAT 为 Principal，不记录 Authorization；account password 与 JWT 在 Git 平面拒绝。
 4. backend resolver 将 slug 转为 opaque repository ID、visibility、status。
 5. 通过 Plugin 解析其隐藏 repository；Plugin read 同时授权 metadata 与 upload-pack，Plugin write 单独授权 receive-pack。Repository 不暴露独立产品权限。
 6. receive-pack 还需执行 Plugin/repository 状态、protected ref、quota 与并发规则；default branch/tag proposed commit 在隔离目录运行 Claude Plugin validation 和 exact name check。
@@ -71,7 +71,7 @@ GET /distribution/marketplaces/{marketplacePublicKey}/marketplace.json
 GET /distribution/users/{username}/marketplace.json
 ```
 
-- path username 必须与 BasicAuth username 和 authenticated user 恒定时间匹配；
+- path username 必须与 BasicAuth username 和 PAT authenticated user 恒定时间匹配；account password 与 JWT 在 subscription distribution 平面拒绝；
 - 每次请求根据当前 authorization 生成用户可读 Plugin 索引；
 - 无效身份、资源或 Host 统一返回 not found；
 - 响应使用 `private, no-store`、`Vary: Authorization, Host`、ETag 与 `nosniff`；

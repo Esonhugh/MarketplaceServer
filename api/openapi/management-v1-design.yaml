@@ -53,19 +53,14 @@ paths:
       responses:
         "200":
           description: A fixed 30-day frontend JWT was issued.
-          headers:
-            X-Request-Id:
-              $ref: "#/components/headers/RequestId"
-            Cache-Control:
-              $ref: "#/components/headers/NoStore"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/LoginSuccess"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthenticated"
-        "429":
-          $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -78,9 +73,6 @@ paths:
       responses:
         "200":
           description: Management-plane health.
-          headers:
-            X-Request-Id:
-              $ref: "#/components/headers/RequestId"
           content:
             application/json:
               schema:
@@ -93,16 +85,12 @@ paths:
       summary: List the current user's personal access tokens
       security:
         - BearerJWT: []
-        - BasicPAT: []
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/Size"
       responses:
         "200":
           description: Exact owner-scoped token page.
-          headers:
-            X-Request-Id:
-              $ref: "#/components/headers/RequestId"
           content:
             application/json:
               schema:
@@ -121,7 +109,6 @@ paths:
       summary: Create a personal access token
       security:
         - BearerJWT: []
-        - BasicPAT: []
       requestBody:
         required: true
         content:
@@ -130,12 +117,7 @@ paths:
               $ref: "#/components/schemas/CreateTokenRequest"
       responses:
         "201":
-          description: Token created; plaintext is disclosed only once.
-          headers:
-            X-Request-Id:
-              $ref: "#/components/headers/RequestId"
-            Cache-Control:
-              $ref: "#/components/headers/NoStore"
+          description: Token created; plaintext remains owner-revealable.
           content:
             application/json:
               schema:
@@ -158,17 +140,44 @@ paths:
       summary: Revoke an owner-scoped personal access token
       security:
         - BearerJWT: []
-        - BasicPAT: []
       responses:
         "204":
-          description: Token revoked; response body is empty.
-          headers:
-            X-Request-Id:
-              $ref: "#/components/headers/RequestId"
+          description: Token revoked idempotently; response body is empty.
         "401":
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/me/tokens/{tokenId}/reveal:
+    parameters:
+      - $ref: "#/components/parameters/TokenId"
+    post:
+      operationId: revealPersonalAccessToken
+      tags: [Personal access tokens]
+      summary: Reveal an owner-scoped personal access token
+      security:
+        - BearerJWT: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RevealTokenRequest"
+      responses:
+        "200":
+          description: Token plaintext and metadata, including inactive status, were returned to its owner.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RevealedTokenSuccess"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "404":
           $ref: "#/components/responses/NotFound"
         "500":
@@ -183,16 +192,12 @@ paths:
       summary: List readable Plugins in a namespace
       security:
         - BearerJWT: []
-        - BasicPAT: []
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/Size"
       responses:
         "200":
           description: Stable namespace-scoped Plugin page.
-          headers:
-            X-Request-Id:
-              $ref: "#/components/headers/RequestId"
           content:
             application/json:
               schema:
@@ -213,7 +218,6 @@ paths:
         storage placement, and clone URL; new Plugins are public by default.
       security:
         - BearerJWT: []
-        - BasicPAT: []
       requestBody:
         required: true
         content:
@@ -222,10 +226,7 @@ paths:
               $ref: "#/components/schemas/CreatePluginRequest"
       responses:
         "201":
-          description: Plugin and hidden repository created atomically.
-          headers:
-            X-Request-Id:
-              $ref: "#/components/headers/RequestId"
+          description: Plugin created with a hidden repository; exact DB/filesystem failure semantics require the Plugin system design and must not claim cross-system ACID.
           content:
             application/json:
               schema:
@@ -250,13 +251,9 @@ paths:
       security:
         - {}
         - BearerJWT: []
-        - BasicPAT: []
       responses:
         "200":
           description: Plugin metadata. Public Plugins may be read anonymously.
-          headers:
-            X-Request-Id:
-              $ref: "#/components/headers/RequestId"
           content:
             application/json:
               schema:
@@ -270,13 +267,9 @@ paths:
       description: Exact recovery and physical Git deletion semantics require the Plugin system design.
       security:
         - BearerJWT: []
-        - BasicPAT: []
       responses:
         "204":
           description: Plugin deletion command accepted synchronously; no body.
-          headers:
-            X-Request-Id:
-              $ref: "#/components/headers/RequestId"
         "401":
           $ref: "#/components/responses/Unauthenticated"
         "403":
@@ -297,16 +290,12 @@ paths:
       security:
         - {}
         - BearerJWT: []
-        - BasicPAT: []
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/Size"
       responses:
         "200":
           description: Stable version page; stable SemVer precedes prerelease selection.
-          headers:
-            X-Request-Id:
-              $ref: "#/components/headers/RequestId"
           content:
             application/json:
               schema:
@@ -329,7 +318,6 @@ paths:
         every Marketplace revision that references Plugin plus tag.
       security:
         - BearerJWT: []
-        - BasicPAT: []
       requestBody:
         required: true
         content:
@@ -339,9 +327,6 @@ paths:
       responses:
         "201":
           description: Existing unpublished tag selected as a published version.
-          headers:
-            X-Request-Id:
-              $ref: "#/components/headers/RequestId"
           content:
             application/json:
               schema:
@@ -369,13 +354,9 @@ paths:
       security:
         - {}
         - BearerJWT: []
-        - BasicPAT: []
       responses:
         "200":
           description: Current tag-driven version state.
-          headers:
-            X-Request-Id:
-              $ref: "#/components/headers/RequestId"
           content:
             application/json:
               schema:
@@ -392,16 +373,12 @@ paths:
       summary: List Marketplace templates in a namespace
       security:
         - BearerJWT: []
-        - BasicPAT: []
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/Size"
       responses:
         "200":
           description: Stable namespace-scoped Marketplace page.
-          headers:
-            X-Request-Id:
-              $ref: "#/components/headers/RequestId"
           content:
             application/json:
               schema:
@@ -416,7 +393,6 @@ paths:
       summary: Create a Marketplace template
       security:
         - BearerJWT: []
-        - BasicPAT: []
       requestBody:
         required: true
         content:
@@ -426,9 +402,6 @@ paths:
       responses:
         "201":
           description: Marketplace template created with an empty draft.
-          headers:
-            X-Request-Id:
-              $ref: "#/components/headers/RequestId"
           content:
             application/json:
               schema:
@@ -452,13 +425,10 @@ paths:
       summary: Get a Marketplace template and current draft
       security:
         - BearerJWT: []
-        - BasicPAT: []
       responses:
         "200":
           description: Marketplace template and Plugin-tag draft selection.
           headers:
-            X-Request-Id:
-              $ref: "#/components/headers/RequestId"
             ETag:
               $ref: "#/components/headers/ETag"
           content:
@@ -473,7 +443,6 @@ paths:
       summary: Replace the mutable Plugin-tag draft selection
       security:
         - BearerJWT: []
-        - BasicPAT: []
       parameters:
         - $ref: "#/components/parameters/IfMatch"
       requestBody:
@@ -486,8 +455,6 @@ paths:
         "200":
           description: Draft replaced.
           headers:
-            X-Request-Id:
-              $ref: "#/components/headers/RequestId"
             ETag:
               $ref: "#/components/headers/ETag"
           content:
@@ -510,13 +477,9 @@ paths:
       summary: Delete or archive a Marketplace template
       security:
         - BearerJWT: []
-        - BasicPAT: []
       responses:
         "204":
           description: Marketplace deletion command completed; no body.
-          headers:
-            X-Request-Id:
-              $ref: "#/components/headers/RequestId"
         "401":
           $ref: "#/components/responses/Unauthenticated"
         "403":
@@ -541,13 +504,9 @@ paths:
         failure boundary blocks implementation of this workflow.
       security:
         - BearerJWT: []
-        - BasicPAT: []
       responses:
         "201":
           description: Revision configuration published and selected as stable.
-          headers:
-            X-Request-Id:
-              $ref: "#/components/headers/RequestId"
           content:
             application/json:
               schema:
@@ -571,16 +530,12 @@ paths:
       summary: List retained Marketplace revision configurations
       security:
         - BearerJWT: []
-        - BasicPAT: []
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/Size"
       responses:
         "200":
           description: Stable revision page.
-          headers:
-            X-Request-Id:
-              $ref: "#/components/headers/RequestId"
           content:
             application/json:
               schema:
@@ -599,13 +554,9 @@ paths:
       summary: Get a retained Plugin-tag revision configuration
       security:
         - BearerJWT: []
-        - BasicPAT: []
       responses:
         "200":
           description: Revision configuration and current projection state.
-          headers:
-            X-Request-Id:
-              $ref: "#/components/headers/RequestId"
           content:
             application/json:
               schema:
@@ -625,13 +576,9 @@ paths:
       description: Historical revisions are expected to have current rebuilt projections for their selected tags.
       security:
         - BearerJWT: []
-        - BasicPAT: []
       responses:
         "200":
           description: Stable selection switched to the requested revision.
-          headers:
-            X-Request-Id:
-              $ref: "#/components/headers/RequestId"
           content:
             application/json:
               schema:
@@ -655,16 +602,12 @@ paths:
       summary: List the current user's credentials for one Marketplace
       security:
         - BearerJWT: []
-        - BasicPAT: []
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/Size"
       responses:
         "200":
           description: Metadata-only credential page.
-          headers:
-            X-Request-Id:
-              $ref: "#/components/headers/RequestId"
           content:
             application/json:
               schema:
@@ -679,7 +622,6 @@ paths:
       summary: Create a per-user, per-Marketplace distribution credential
       security:
         - BearerJWT: []
-        - BasicPAT: []
       requestBody:
         required: true
         content:
@@ -688,12 +630,7 @@ paths:
               $ref: "#/components/schemas/CreateDistributionCredentialRequest"
       responses:
         "201":
-          description: Credential created; plaintext password is disclosed once.
-          headers:
-            X-Request-Id:
-              $ref: "#/components/headers/RequestId"
-            Cache-Control:
-              $ref: "#/components/headers/NoStore"
+          description: Credential created according to its owning system contract.
           content:
             application/json:
               schema:
@@ -716,13 +653,9 @@ paths:
       summary: Revoke an owner-scoped distribution credential
       security:
         - BearerJWT: []
-        - BasicPAT: []
       responses:
         "204":
           description: Credential revoked; no body.
-          headers:
-            X-Request-Id:
-              $ref: "#/components/headers/RequestId"
         "401":
           $ref: "#/components/responses/Unauthenticated"
         "403":
@@ -736,11 +669,7 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: Frontend HS256 JWT; authorization and auth_version are checked on every request.
-    BasicPAT:
-      type: http
-      scheme: basic
-      description: CLI/automation uses username in the Basic username slot and PAT in the password slot.
+      description: Stateless 30-day HS256 management JWT containing username, iat, and exp only.
 
   parameters:
     Page:
@@ -812,16 +741,10 @@ components:
   headers:
     RequestId:
       required: true
-      description: Opaque request correlation identifier.
+      description: Framework-generated ULID request correlation identifier for error responses.
       schema:
         type: string
-        minLength: 1
-        maxLength: 128
-    NoStore:
-      required: true
-      schema:
-        type: string
-        const: private, no-store
+        pattern: "^[0-9A-HJKMNP-TV-Z]{26}$"
     ETag:
       required: true
       schema:
@@ -864,8 +787,8 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
-    ValidationFailed:
-      description: Request syntax or business input is invalid.
+    BadRequest:
+      description: The required body is missing, too large, unreadable, malformed, or contains a trailing JSON value.
       headers:
         X-Request-Id:
           $ref: "#/components/headers/RequestId"
@@ -873,8 +796,8 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
-    RateLimited:
-      description: Authentication attempts are temporarily rate limited.
+    ValidationFailed:
+      description: Request syntax or business input is invalid.
       headers:
         X-Request-Id:
           $ref: "#/components/headers/RequestId"
@@ -921,8 +844,10 @@ components:
           type: string
         requestId:
           type: string
+          pattern: "^[0-9A-HJKMNP-TV-Z]{26}$"
         details:
-          description: Optional safe structured validation or conflict details.
+          type: string
+          description: Optional safe human-readable detail; clients must branch on code, not this text.
 
     LoginRequest:
       type: object
@@ -943,8 +868,7 @@ components:
           type: string
         token:
           type: string
-          writeOnly: true
-          description: Fixed 30-day HS256 frontend JWT.
+          description: Fixed 30-day stateless HS256 frontend JWT containing username, iat, and exp.
         expiresAt:
           $ref: "#/components/schemas/Timestamp"
     LoginSuccess:
@@ -968,18 +892,25 @@ components:
         data:
           $ref: "#/components/schemas/Health"
 
+    TokenPreset:
+      type: string
+      enum: [sub-read, git-clone, git-write]
+      description: Cumulative subscription/Git capability; it never expands the owner's current resource authorization.
+    TokenStatus:
+      type: string
+      enum: [active, expired, revoked]
     TokenMetadata:
       type: object
-      required: [id, name, scopes, createdAt]
+      required: [id, name, preset, status, expiresAt, lastUsedAt, revokedAt, createdAt]
       properties:
         id:
           $ref: "#/components/schemas/UUID"
         name:
           type: string
-        scopes:
-          type: array
-          items:
-            type: string
+        preset:
+          $ref: "#/components/schemas/TokenPreset"
+        status:
+          $ref: "#/components/schemas/TokenStatus"
         expiresAt:
           oneOf:
             - $ref: "#/components/schemas/Timestamp"
@@ -996,23 +927,27 @@ components:
           $ref: "#/components/schemas/Timestamp"
     CreateTokenRequest:
       type: object
-      required: [name, scopes]
+      required: [name, preset]
       properties:
         name:
           type: string
           minLength: 1
           maxLength: 128
-        scopes:
-          type: array
-          minItems: 1
-          uniqueItems: true
-          items:
-            type: string
+        preset:
+          $ref: "#/components/schemas/TokenPreset"
         expiresAt:
           oneOf:
             - $ref: "#/components/schemas/Timestamp"
             - type: "null"
-    CreatedToken:
+    RevealTokenRequest:
+      type: object
+      required: [password]
+      properties:
+        password:
+          type: string
+          minLength: 1
+          writeOnly: true
+    RevealedToken:
       allOf:
         - $ref: "#/components/schemas/TokenMetadata"
         - type: object
@@ -1020,14 +955,20 @@ components:
           properties:
             token:
               type: string
-              writeOnly: true
-              description: One-time plaintext PAT.
+              pattern: "^mpsk_[A-Za-z0-9_-]{43}$"
+              description: Repeatably revealable plaintext PAT.
     CreatedTokenSuccess:
       type: object
       required: [data]
       properties:
         data:
-          $ref: "#/components/schemas/CreatedToken"
+          $ref: "#/components/schemas/RevealedToken"
+    RevealedTokenSuccess:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/RevealedToken"
 
     Plugin:
       type: object
@@ -1215,7 +1156,7 @@ components:
               type: string
               format: uuid
               writeOnly: true
-              description: One-time plaintext distribution password.
+              description: Plaintext distribution password; repeatable reveal remains subject to the distribution-credential system design.
     CreatedDistributionCredentialSuccess:
       type: object
       required: [data]

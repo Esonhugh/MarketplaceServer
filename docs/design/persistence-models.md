@@ -23,7 +23,7 @@
 | Slug/name | namespace-scoped identity 使用 composite unique index |
 | Time | 只添加有业务语义的时间；nullable fact 使用 `*time.Time` |
 | Lifecycle | aggregate 自己定义 string values，不使用跨 aggregate 的万能 status enum |
-| Secret | 只保存 hash/HMAC/index，不保存 plaintext password、token 或 private key |
+| Secret | 默认只保存 hash/HMAC/index；plaintext password/private key 禁止落库。只有获批 repeatable reveal contract 可按 ADR-0006 使用显式 `secret_plaintext`，且 GORM/API 必须隔离 |
 | JSON | 只用于确有必要的 snapshot/metadata，不替代需要查询和约束的关系 |
 | Deletion | 不默认 soft delete；由系统 lifecycle 设计决定 |
 

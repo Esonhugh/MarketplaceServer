@@ -11,7 +11,7 @@
 - namespace slug 和身份字段的不可变性必须由数据库约束或 guard 强制，而不只依赖 service。
 - DAO 列表和 mutation 必须显式按 namespace 或已解析资源 ID 限定，禁止全局查询后在内存过滤。
 - 团队资源属于团队 namespace，不因创建者离队而转为个人资源或消失。
-- 用户 disabled、credential revoked 或团队权限撤销必须在下一次请求生效，不删除历史审计或资源。
+- credential revoked 与团队/资源权限撤销必须在下一次受对应 policy 检查的请求生效，不删除历史审计或资源。Stateless 30-day frontend JWT 不检查 live user status；disabled 立即阻止新 login/PAT authentication，但已签发 JWT 认证可持续至到期，资源 policy 仍实时生效。
 - 业务主键使用不可枚举 ID；slug/public key 只用于经校验的外部定位。
 
 ## Authorization
@@ -21,7 +21,7 @@
 - REST、Git HTTPS、未来 SSH、distribution 和 worker 复用同一 action/resource 语义。
 - handler 只提取身份与资源；service/protocol boundary 必须执行服务端授权。前端隐藏按钮不是授权。
 - 匿名主体只可能获得显式公开资源的 read action，永远不能写入、发布或读取私有 metadata。
-- PAT scope 是主体当前权限的交集，不能扩大用户、组或资源 policy。
+- PAT preset 只表达 `sub-read`、`git-clone`、`git-write` 的逐级 credential capability，并与主体当前 Marketplace/Plugin policy 取交集；PAT 不能扩大权限，也不能用于 management API。
 - 系统管理员和团队 owner 是不同权限域；跨租户管理必须走显式管理路径并审计。
 
 ### 目标团队角色矩阵 — 规划中
@@ -91,8 +91,8 @@
 目标 credential 固定为 `user + marketplace_template` scope：
 
 - Marketplace 有不可变、公开的 BasicAuth username；它不是用户身份或 secret。
-- password 是独立随机值，不能复用 Marketplace/Plugin/version/distribution UUID；明文只在创建响应显示一次，但撤销/过期前可供多次 Git 请求使用。
-- 数据库只保存 `HMAC-SHA-256(pepper, password)` 等值索引；pepper 来自 secret manager/runtime environment。
+- password 是独立随机值，不能复用 Marketplace/Plugin/version/distribution UUID；是否支持 repeatable reveal 由该系统 API contract 决定。
+- 默认数据库只保存 `HMAC-SHA-256(pepper, password)` 等值索引；若获批 repeatable reveal，则按 ADR-0006 保存显式 `secret_plaintext`，并把数据库/备份纳入 credential trust boundary。
 - 同一用户和 Marketplace 可有多个命名 credential，并独立设置 expiry/revocation。
 - credential 只能用于目标 Marketplace 的 `marketplace.read`/`distribution.read`，不能用于 `/api/v1` 管理或 repository write。
 - 每次请求都重新检查 credential、用户状态与当前 Marketplace authorization；离队或 disabled 后立即拒绝。
@@ -106,7 +106,7 @@
 - receive-pack 成功应产生唯一 push/event identity，消费者幂等更新 DB projection。
 - reconciliation 可以检测 tag/current-SHA 与 DB/projection pointer 不一致并重建新 artifact，但不能在未定义 failure semantics 时静默移动 Git ref、删除旧 artifact 或假装完成原子切换；不确定状态需要高优先级告警和人工恢复。
 - worker 至少一次执行，使用 lease/heartbeat、有限指数退避与 dead-letter/人工处理；不能假设事件只处理一次。
-- audit action 使用稳定枚举；metadata 脱敏，不保存 password、token、Authorization、完整 key、packfile 或 secret-bearing manifest。
+- audit action 使用稳定枚举；metadata 脱敏，不保存 password、token、Authorization、完整 key、packfile 或 secret-bearing manifest。获批 `secret_plaintext` 只存在 owning persistence record 和明确 create/reveal response，绝不进入 audit。
 - 高风险控制面 mutation 的 audit/outbox 需要与业务状态同事务；写失败应使 mutation 失败。
 - audit 数据 append-only，普通业务主体不能修改或删除；retention/export 自身也需审计。
 

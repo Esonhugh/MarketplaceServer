@@ -28,6 +28,7 @@
 - [GORM persistence](persistence-models.md)：显式 records、ordered AutoMigrate/tags、tenant-scoped queries 和 migration tests。
 - [Management API](management-api-contract.md)：deployed/proposed OpenAPI、envelope、page/size、JWT/PAT 和 handwritten frontend client。
 - [System design template](system-design-template.md)：后续系统使用的精简七部分模板。
+- [系统设计目录](systems/README.md)：按永久序号、业务系统和请求平面分类的详细设计。
 
 ## ADR
 
@@ -38,6 +39,7 @@
 - [ADR 0003: GORM AutoMigrate authority](../decisions/0003-gorm-automigrate-authority.md)
 - [ADR 0004: OpenAPI documentation split](../decisions/0004-openapi-management-contract.md)
 - [ADR 0005: API success envelope](../decisions/0005-api-success-envelope.md)
+- [ADR 0006: Repeatably revealable credential storage](../decisions/0006-repeatable-credential-plaintext-storage.md)
 
 小范围 field、route 或实现选择留在 owning system design，不创建 ADR。
 

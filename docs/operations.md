@@ -137,7 +137,8 @@ TLS ingress / reverse proxy
 ## Runtime security
 
 - 进程以非 root 用户运行，container root filesystem 尽量只读，只给 Git storage 和明确 temp path 写权限。
-- database credential、API-key pepper、bootstrap credential、future SSH host key 由 secret manager 或 protected mount/environment 提供。
+- database credential、PAT pepper、bootstrap credential、JWT secret、future SSH host key 由 secret manager 或 protected mount/environment 提供；YAML `jwtSecret` fallback 只用于明确的开发配置。
+- 按 ADR-0006 获批的 `secret_plaintext` 使关系数据库与备份进入 credential trust boundary；其访问、导出和恢复按 secret material 保护。
 - 日志不得包含 password、token、Authorization、private key、secret-bearing URL、pack body 或完整敏感 config。
 - 固定并验证 Go、Git、Node 依赖版本；最终生产镜像不包含 npm、compiler 和不需要的工具。
 - 诊断 endpoint 默认可关闭并受强认证，禁止硬编码 pprof credential。

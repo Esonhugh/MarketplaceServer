@@ -46,10 +46,10 @@
 
 | Operation | Auth/action | Request DTO | Success/status | Stable errors | Pagination/cache/concurrency |
 |---|---|---|---|---|---|
-| <method/path> | <Bearer JWT / Basic PAT> | <handwritten DTO> | <data envelope/204> | <codes> | <page/size/total, no-store, ETag> |
+| <method/path> | <plane-specific credential> | <handwritten DTO> | <data envelope/204> | <codes> | <page/size/total, cache, ETag> |
 
 - API IDs 使用 string；unknown JSON fields ignored；malformed/trailing JSON rejected。
-- 所有 response 返回 `X-Request-Id`。
+- Error response 返回框架生成的 ULID `X-Request-Id`，body `requestId` 与 header 相同；success 是否返回由 OpenAPI operation 定义。
 - deployed 与 proposed OpenAPI 分开；`marketplace.json` 不由 management OpenAPI 定义。
 
 ### Authorization

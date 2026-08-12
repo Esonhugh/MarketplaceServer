@@ -57,7 +57,7 @@ Identity、authorization、distribution，以及未来的 teams、repositories�
 9. **保持 Plugin 与 tag authority。** Plugin 是唯一 user-facing resource，隐藏 repository 与其一对一；发布只选择 canonical `v`-prefixed SemVer tag，manifest version 不作为 identity；tag 移动更新同一 logical version，但必须先通过 protected receive validation 和所有引用 revision 的 prebuild。
 10. **保持 Marketplace revision 配置可追踪。** draft 可变，published revision 保留不可修改的 Plugin+tag selection；projection artifact 可在 tag 移动时重建并切换。Git-ref/DB-pointer failure 尚未设计完成前不得实现或宣称跨系统原子性；public key 与 distribution UUID 是 locator，不是 credential。
 11. **分发请求绝对只读。** distribution handler 不能 init repository、build projection、update ref、注册 receive-pack 或修改开发 repository/active projection。
-12. **保护 secret。** 不存储或记录 plaintext password/token、Authorization、private key、secret-bearing URL、pack body、server filesystem path 或 private runtime config；撤销和当前授权在下一请求生效。
+12. **保护 secret。** 不存储 plaintext password、JWT signing secret、private key 或未获批准为 repeatably revealable 的 credential；获批准可重复查看的 credential 只能按 ADR-0006 使用显式 `secret_plaintext`，数据库与备份进入 credential trust boundary。任何 secret、Authorization、secret-bearing URL、pack body、server filesystem path 或 private runtime config 都不得进入日志、audit、error 或 debug output。
 13. **以官方 Marketplace schema 为准。** 修改 `marketplace.json` 字段前核对当前官方 schema；不猜 source type/兼容字段；直接 URL 索引不使用 relative Plugin source，Git source 使用官方 `url` 形式和固定 SHA。
 14. **frontend 只做静态嵌入。** Svelte/Tailwind 输出由 `frontend` package 的 `embed.FS` 托管，生产不运行 Node SSR；只有 `frontend` 设置全局 `NoRoute`，backend/Git/distribution/health/debug/metrics path 不能落入 SPA。
 15. **安全规则必须有 deny tests。** tenant、authorization、path、credential、状态转换、publication 和 distribution 变更同时覆盖允许与拒绝路径；Git protocol 变更使用真实 client 测试。

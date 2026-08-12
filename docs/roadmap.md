@@ -16,12 +16,12 @@ This roadmap is the authoritative future delivery order. Items listed here are p
 
 ### Authentication hardening
 
-- Add `POST /api/v1/auth/login` issuing a fixed 30-day HS256 JWT with live `auth_version` revocation; frontend localStorage keeps only username and JWT.
-- Keep management CLI authentication as Basic username+PAT and Git authentication as PAT only.
-- Add login throttling and bounded concurrent Argon2 verification.
-- Define API-key expiry and delegation policy, including maximum delegated lifetime.
-- Add authentication and token lifecycle audit events without request-side secret mutation.
-- Add operator-supported secret rotation procedures for API-key peppers and bootstrap credentials.
+- Add `POST /api/v1/auth/login` issuing a stateless fixed 30-day HS256 JWT containing only username/iat/exp; frontend localStorage keeps only username and JWT.
+- Keep management API on anonymous public allowlist plus Bearer JWT; PAT is only for subscription read and development Git clone/write capabilities.
+- Replace arbitrary PAT scopes with cumulative `sub-read`, `git-clone`, and `git-write` presets; add owner-only repeatable reveal and page/size/total management.
+- Define optional PAT expiry and current resource-policy intersection; PAT never expands user authorization.
+- Add authentication and token lifecycle audit events without logging password, PAT, Authorization, or request bodies.
+- Add operator-supported secret rotation procedures for PAT peppers and bootstrap credentials; JWT key-ring rotation remains deferred.
 
 ### Production verification
 
@@ -53,7 +53,7 @@ This roadmap is the authoritative future delivery order. Items listed here are p
 ### Distribution credentials
 
 - Add per-user, per-Marketplace private distribution credentials.
-- Store only peppered HMAC indexes and return plaintext once.
+- Decide in that system contract whether distribution credentials are repeatably revealable; if so, apply ADR-0006, otherwise store only a peppered HMAC and return plaintext once.
 - Support multiple named credentials, optional expiry, and independent revocation.
 - Recheck active account and current Marketplace authorization on every request.
 - Support the same credential in HTTP JSON Authorization headers and Git Credential Helper flows without embedding passwords in URLs.
