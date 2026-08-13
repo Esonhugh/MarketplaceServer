@@ -21,13 +21,13 @@
 
 - 错误响应至少包含稳定 `code`、用户可理解的 `message` 与框架 ULID `requestId`，并返回相同 `X-Request-Id`；success/204 是否携带 request ID 由 operation contract 定义，不返回内部 stack；
 - 创建成功使用 `201`，异步命令 `202`，无 body 删除 `204`，并发冲突 `409`，业务校验 `422`，限流 `429`；
-- target list 使用 `page`/`size`，默认 `1`/`20`、最大 size `100`，并返回 exact filtered `total`；已部署 PAT cursor list 仍按 deployed OpenAPI 描述，等待单独迁移；
+- 已部署 PAT list 使用 `page`/`size`，默认 `1`/`20`、最大 size `100`，并在 `data` envelope 中返回 owner-scoped exact `total`；
 - 可变资源应提供 ETag/version，并通过 `If-Match` 防止覆盖并发更新；
 - namespace URL slug 必须先解析为 namespace ID，再授权和查询；
 - 高风险副作用使用显式 command endpoint，不通过通用 `PATCH status` 触发；
 - 外部输入在 handler 校验，资源归属和最终授权仍在 service boundary 完成。
 
-未来 endpoint 清单只在 [路线图](roadmap.md) 以 feature slice 描述；不要在协议文档中把未注册 route 写成当前 API。
+当前 management identity wire 由 [`api/openapi/management-v1.yaml`](../api/openapi/management-v1.yaml) 精确定义：login/health 公开，PAT list/create/revoke/reveal 只接受 Bearer JWT；account password 只出现在 login/reveal body，PAT 不作为 management credential。未来 endpoint 清单只在 [路线图](roadmap.md) 以 feature slice 描述；不要在协议文档中把未注册 route 写成当前 API。
 
 ## 开发 Git Smart HTTP — 已实现
 

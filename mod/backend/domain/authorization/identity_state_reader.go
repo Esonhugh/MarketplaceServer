@@ -6,17 +6,18 @@ import (
 	"fmt"
 
 	distributiondomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/distribution"
-	identitydomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity"
+	identitydao "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/dao"
+	identitymodel "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/model"
 	"github.com/Esonhugh/MarketplaceServer/pkg/auth"
 	"gorm.io/gorm"
 )
 
 type GORMIdentityStateReader struct {
 	db         *gorm.DB
-	identities *identitydomain.Repository
+	identities *identitydao.Repository
 }
 
-func NewGORMIdentityStateReader(db *gorm.DB, identities *identitydomain.Repository) (*GORMIdentityStateReader, error) {
+func NewGORMIdentityStateReader(db *gorm.DB, identities *identitydao.Repository) (*GORMIdentityStateReader, error) {
 	if db == nil || identities == nil {
 		return nil, errors.New("authorization identity state reader requires database and identity repository")
 	}
@@ -37,13 +38,13 @@ func (reader *GORMIdentityStateReader) ReadAuthorizationState(ctx context.Contex
 		return IdentityState{}, ErrIdentityUnknown
 	}
 	user, err := reader.identities.FindUserByID(ctx, principal.UserID())
-	if errors.Is(err, identitydomain.ErrIdentityNotFound) {
+	if errors.Is(err, identitydao.ErrIdentityNotFound) {
 		return IdentityState{}, ErrIdentityUnknown
 	}
 	if err != nil {
 		return IdentityState{}, err
 	}
-	state.Active = user.Status == identitydomain.UserStatusActive
+	state.Active = user.Status == identitymodel.UserStatusActive
 	if !state.Active {
 		return state, nil
 	}
@@ -52,7 +53,7 @@ func (reader *GORMIdentityStateReader) ReadAuthorizationState(ctx context.Contex
 		return IdentityState{}, err
 	}
 	if ownerNamespaceID != "" {
-		var namespace identitydomain.Namespace
+		var namespace identitymodel.Namespace
 		err = reader.db.WithContext(ctx).Where("id = ?", ownerNamespaceID).Take(&namespace).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return IdentityState{}, ErrIdentityUnknown
@@ -60,7 +61,7 @@ func (reader *GORMIdentityStateReader) ReadAuthorizationState(ctx context.Contex
 		if err != nil {
 			return IdentityState{}, fmt.Errorf("resolve authorization namespace: %w", err)
 		}
-		state.OwnsPersonalNamespace = namespace.Kind == identitydomain.NamespaceKindUser && namespace.OwnerUserID != nil && *namespace.OwnerUserID == user.ID
+		state.OwnsPersonalNamespace = namespace.Kind == identitymodel.NamespaceKindUser && namespace.OwnerUserID != nil && *namespace.OwnerUserID == user.ID
 	}
 	state.OwnsResource = ownerUserID == user.ID
 	return state, nil
@@ -95,7 +96,7 @@ func (reader *GORMIdentityStateReader) resourceState(ctx context.Context, resour
 		namespaceID, err := reader.personalNamespaceID(ctx, resource.ID)
 		return namespaceID, resource.ID, false, err
 	case "token":
-		var token identitydomain.PersonalAccessToken
+		var token identitymodel.PersonalAccessToken
 		if err := reader.db.WithContext(ctx).Select("user_id").Where("id = ?", resource.ID).Take(&token).Error; err != nil {
 			return "", "", false, mapResourceError(err)
 		}
@@ -107,10 +108,10 @@ func (reader *GORMIdentityStateReader) resourceState(ctx context.Context, resour
 }
 
 func (reader *GORMIdentityStateReader) personalNamespaceID(ctx context.Context, userID string) (string, error) {
-	var namespace identitydomain.Namespace
+	var namespace identitymodel.Namespace
 	if err := reader.db.WithContext(ctx).
 		Select("id").
-		Where("kind = ? AND owner_user_id = ?", identitydomain.NamespaceKindUser, userID).
+		Where("kind = ? AND owner_user_id = ?", identitymodel.NamespaceKindUser, userID).
 		Take(&namespace).Error; err != nil {
 		return "", mapResourceError(err)
 	}

@@ -25,15 +25,23 @@ cp config.example.yaml config.yaml
 - `sql.dsn`：PostgreSQL 或 MySQL DSN；
 - `git.storageRoot`：持久化 Git storage root；
 - `MARKETPLACE_API_KEY_PEPPER`：Base64 编码、解码后至少 32 bytes 的随机 secret；
-- `MARKETPLACE_BOOTSTRAP_ADMIN_PASSWORD`：首次初始化管理员时使用的 password。
+- `MARKETPLACE_BOOTSTRAP_ADMIN_PASSWORD`：首次初始化管理员时使用的 password；
+- `MARKETPLACE_JWT_SECRET`：management JWT signing secret，优先于 `backend.jwtSecret`；生产必须通过受保护环境或 secret manager 提供。
 
 ```bash
 export MARKETPLACE_BOOTSTRAP_ADMIN_PASSWORD='<initial-admin-password>'
 export MARKETPLACE_API_KEY_PEPPER='<base64-secret>'
+export MARKETPLACE_JWT_SECRET='<random-jwt-signing-secret>'
 go run . server -c ./config.yaml
 ```
 
-Secret 不进入 `config.example.yaml`、日志或 frontend bundle。支持的配置键以 [`config.example.yaml`](../config.example.yaml) 为准。
+`config.example.yaml` 只保留空的 `backend.jwtSecret` 安全 fallback，不包含真实 secret。若 `MARKETPLACE_JWT_SECRET` 已设置但为空，启动会失败而不会退回 YAML；生产不应把 JWT secret 写入普通配置文件、日志或 frontend bundle。支持的配置键以 [`config.example.yaml`](../config.example.yaml) 为准。
+
+## Identity 数据兼容
+
+Identity migration 遇到旧 `personal_access_token_scopes` table，或已有 `personal_access_tokens` 缺少 `preset`、`secret_plaintext`、`secret_hmac` 时，会返回 `identity: legacy credential schema requires operator rebuild` 并拒绝 backend 启动；runtime 不会自动删除、backfill 或双读旧 credential schema。
+
+开发环境若确认数据可丢弃，应先停止服务，再由 operator 删除并重建整个开发数据库，然后按上述环境变量重新启动和 bootstrap；不要让应用执行 destructive fallback。任何含需保留数据的环境都必须先备份，并为旧 PAT 制定显式迁移或轮换方案，不能直接套用开发重建流程。
 
 ## CLI
 

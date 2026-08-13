@@ -83,7 +83,9 @@ handler → domain service → repository/adapter → model
 - handler：协议输入输出、认证上下文、状态码和稳定错误结构；
 - service：授权、业务规则、状态转换和事务边界；
 - repository/adapter：GORM 或外部 contract 调用；
-- model：持久化模型与领域 DTO。
+- model：持久化模型和最小领域 value，不直接作为 API DTO。
+
+当前 identity 领域按 `domain/identity/model`、`domain/identity/dao`、`domain/identity/service` 拆分，management HTTP 位于 `handler/identity`。这是 backend 内部分层；不会改变五模块拓扑，也不把 GORM record/DAO 映射到全局 DI。
 
 handler 不直接执行 GORM 查询。backend 内部领域对象默认不 Map 到全局 DI；只有 `git`、`frontend` 等顶层模块确实消费的窄 contract 才能共享。
 
@@ -137,7 +139,7 @@ URL slug 先由 backend resolver 转为 opaque identity；Git 模块不能用用
 
 模块 Config 字段必须同时带 `yaml` 与 `mapstructure` tag。支持的 operator 配置键只在 [`config.example.yaml`](../config.example.yaml) 中维护完整清单；设计文档不复制第二份配置表。
 
-密钥不进入示例配置。尚未实现的 SSH listener、外部 base URL 或可调配额不能提前伪装成已支持配置。
+示例配置可以列出空 secret key 以公开受支持的配置形状，但不得包含真实或可误用的 secret value；`backend.jwtSecret` 示例必须为空，并注明生产优先使用 `MARKETPLACE_JWT_SECRET`。尚未实现的 SSH listener、外部 base URL 或可调配额不能提前伪装成已支持配置。
 
 ## jin 兼容说明
 

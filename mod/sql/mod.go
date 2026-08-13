@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -57,12 +59,17 @@ func (m *Mod) PreInit(hub *kernel.Hub) error {
 	if opener == nil {
 		opener = defaultGORMOpener
 	}
-	m.db, err = opener(dialector, &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	logLevel := logger.Silent
+	if m.config.Debug {
+		logLevel = logger.Info
+	}
+	gormLogger := logger.New(log.New(os.Stdout, "\r\n", log.LstdFlags), logger.Config{
+		LogLevel:             logLevel,
+		ParameterizedQueries: true,
+	})
+	m.db, err = opener(dialector, &gorm.Config{Logger: gormLogger})
 	if err != nil {
 		return errors.New("open sql database: failed")
-	}
-	if m.config.Debug {
-		m.db = m.db.Debug()
 	}
 
 	sqlDB, err := m.db.DB()

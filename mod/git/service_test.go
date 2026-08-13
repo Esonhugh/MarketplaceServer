@@ -3,6 +3,7 @@ package git
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"net/http"
@@ -254,19 +255,19 @@ func TestModLoadRejectsTypedNilDependencies(t *testing.T) {
 		{name: "authenticator", mapDependency: func(hub *kernel.Hub) {
 			resolver := gitservice.RepositoryResolver(&fakeRepositoryResolver{})
 			var value *typedNilAuthenticator
-			dependency := auth.BasicAuthenticator(value)
+			dependency := auth.GitPATAuthenticator(value)
 			hub.Map(&resolver, &dependency)
-		}, want: "BasicAuthenticator"},
+		}, want: "GitPATAuthenticator"},
 		{name: "authorizer", mapDependency: func(hub *kernel.Hub) {
 			resolver := gitservice.RepositoryResolver(&fakeRepositoryResolver{})
-			authenticator := auth.BasicAuthenticator(fakeGitAuthenticator{})
+			authenticator := auth.GitPATAuthenticator(fakeGitAuthenticator{})
 			var value *typedNilAuthorizer
 			dependency := auth.Authorizer(value)
 			hub.Map(&resolver, &authenticator, &dependency)
 		}, want: "Authorizer"},
 		{name: "distribution resolver", mapDependency: func(hub *kernel.Hub) {
 			resolver := gitservice.RepositoryResolver(&fakeRepositoryResolver{})
-			authenticator := auth.BasicAuthenticator(fakeGitAuthenticator{})
+			authenticator := auth.GitPATAuthenticator(fakeGitAuthenticator{})
 			authorizer := auth.Authorizer(fakeGitAuthorizer{})
 			var value *typedNilDistributionResolver
 			dependency := distributionservice.Resolver(value)
@@ -299,9 +300,9 @@ func TestModMapsRepositoryServiceAndRoutesAnonymousUploadPack(t *testing.T) {
 		"team-a/plugin-one": {ID: testRepositoryID, Visibility: gitservice.VisibilityPublic, Status: gitservice.StatusReady},
 	}})
 	distributionResolver := distributionservice.Resolver(fakeDistributionResolver{})
-	basicAuthenticator := auth.BasicAuthenticator(fakeGitAuthenticator{})
+	gitPATAuthenticator := auth.GitPATAuthenticator(fakeGitAuthenticator{})
 	authorizer := auth.Authorizer(fakeGitAuthorizer{})
-	hub.Map(&engine, &resolver, &distributionResolver, &basicAuthenticator, &authorizer)
+	hub.Map(&engine, &resolver, &distributionResolver, &gitPATAuthenticator, &authorizer)
 
 	mod := &Mod{}
 	cfg := mod.Config().(*Config)
@@ -459,7 +460,7 @@ func TestSmartHTTPRepositoryStatusMatrix(t *testing.T) {
 					engine := newSmartHTTPTestEngineWithResolver(t, Config{StorageRoot: root, gitBinary: fake.path}, &fakeRepositoryResolver{repositories: map[string]gitservice.Repository{"team-a/plugin-one": repository}})
 					before := fake.readLog(t)
 					request := httptest.NewRequest(http.MethodPost, "/git/team-a/plugin-one.git/"+operation.path, strings.NewReader("request"))
-					request.SetBasicAuth("alice", "secret")
+					request.SetBasicAuth("alice", "git-write-pat")
 					response := httptest.NewRecorder()
 					engine.ServeHTTP(response, request)
 					if response.Code != operation.want {
@@ -474,6 +475,43 @@ func TestSmartHTTPRepositoryStatusMatrix(t *testing.T) {
 						t.Fatalf("denied request invoked git; before=%q after=%q", before, after)
 					}
 				})
+			}
+		})
+	}
+}
+
+func TestSmartHTTPMapsGitServicesToPATOperations(t *testing.T) {
+	fake := newFakeGit(t)
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "repositories", "01", testRepositoryID+".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	repository := gitservice.Repository{ID: testRepositoryID, NamespaceID: "namespace-a", OwnerUserID: "user-alice", Visibility: "private", Status: gitservice.StatusReady}
+	authenticator := &recordingGitPATAuthenticator{principal: gitPATPrincipal(t, auth.ActionRepositoryRead, auth.ActionRepositoryWrite)}
+	engine := newSmartHTTPTestEngineWithDependencies(t, Config{StorageRoot: root, gitBinary: fake.path}, &fakeRepositoryResolver{repositories: map[string]gitservice.Repository{"team-a/plugin-one": repository}}, authenticator)
+
+	for _, test := range []struct {
+		name      string
+		method    string
+		path      string
+		operation auth.GitOperation
+	}{
+		{name: "upload advertisement", method: http.MethodGet, path: "/git/team-a/plugin-one.git/info/refs?service=git-upload-pack", operation: auth.GitOperationRead},
+		{name: "upload RPC", method: http.MethodPost, path: "/git/team-a/plugin-one.git/git-upload-pack", operation: auth.GitOperationRead},
+		{name: "receive advertisement", method: http.MethodGet, path: "/git/team-a/plugin-one.git/info/refs?service=git-receive-pack", operation: auth.GitOperationWrite},
+		{name: "receive RPC", method: http.MethodPost, path: "/git/team-a/plugin-one.git/git-receive-pack", operation: auth.GitOperationWrite},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			before := len(authenticator.operations)
+			request := httptest.NewRequest(test.method, test.path, strings.NewReader("request"))
+			request.SetBasicAuth("alice", "git-write-pat")
+			response := httptest.NewRecorder()
+			engine.ServeHTTP(response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %q", response.Code, response.Body.String())
+			}
+			if len(authenticator.operations) != before+1 || authenticator.operations[before] != test.operation {
+				t.Fatalf("operations = %v, want appended %q", authenticator.operations, test.operation)
 			}
 		})
 	}
@@ -500,16 +538,36 @@ func TestSmartHTTPAppliesCredentialsAuthorizationAndReadinessBeforeGit(t *testin
 	})
 
 	t.Run("invalid supplied credentials do not downgrade to anonymous", func(t *testing.T) {
-		engine := newSmartHTTPTestEngineWithResolver(t, Config{StorageRoot: root, gitBinary: fake.path}, &fakeRepositoryResolver{repositories: map[string]gitservice.Repository{"team-a/plugin-one": private}})
-		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/git/team-a/plugin-one.git/git-upload-pack", strings.NewReader("request"))
-		req.SetBasicAuth("alice", "wrong")
-		engine.ServeHTTP(w, req)
-		if w.Code != http.StatusUnauthorized {
-			t.Fatalf("invalid credentials status = %d, want 401", w.Code)
-		}
-		if got := fake.readLog(t); got != "" {
-			t.Fatalf("invalid credentials invoked git: %q", got)
+		public := private
+		public.Visibility = gitservice.VisibilityPublic
+		for _, test := range []struct {
+			name          string
+			authorization string
+		}{
+			{name: "wrong PAT", authorization: basicAuthorization("alice", "wrong")},
+			{name: "wrong username", authorization: basicAuthorization("mallory", "git-clone-pat")},
+			{name: "revoked PAT", authorization: basicAuthorization("alice", "revoked-pat")},
+			{name: "expired PAT", authorization: basicAuthorization("alice", "expired-pat")},
+			{name: "disabled user PAT", authorization: basicAuthorization("alice", "disabled-user-pat")},
+			{name: "subscription PAT", authorization: basicAuthorization("alice", "sub-read-pat")},
+			{name: "account password", authorization: basicAuthorization("alice", "account-password")},
+			{name: "JWT bearer", authorization: "Bearer jwt-token"},
+			{name: "malformed basic", authorization: "Basic !!!"},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				engine := newSmartHTTPTestEngineWithResolver(t, Config{StorageRoot: root, gitBinary: fake.path}, &fakeRepositoryResolver{repositories: map[string]gitservice.Repository{"team-a/plugin-one": public}})
+				before := fake.readLog(t)
+				response := httptest.NewRecorder()
+				request := httptest.NewRequest(http.MethodPost, "/git/team-a/plugin-one.git/git-upload-pack", strings.NewReader("request"))
+				request.Header.Set("Authorization", test.authorization)
+				engine.ServeHTTP(response, request)
+				if response.Code != http.StatusUnauthorized {
+					t.Fatalf("status = %d, want 401", response.Code)
+				}
+				if after := fake.readLog(t); after != before {
+					t.Fatalf("invalid credentials invoked git; before=%q after=%q", before, after)
+				}
+			})
 		}
 	})
 
@@ -526,7 +584,7 @@ func TestSmartHTTPAppliesCredentialsAuthorizationAndReadinessBeforeGit(t *testin
 			t.Run(tc.name, func(t *testing.T) {
 				w := httptest.NewRecorder()
 				req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader("request"))
-				req.SetBasicAuth("alice", "secret")
+				req.SetBasicAuth("alice", "git-write-pat")
 				engine.ServeHTTP(w, req)
 				if w.Code != http.StatusOK {
 					t.Fatalf("authorized %s status = %d body=%q", tc.name, w.Code, w.Body.String())
@@ -538,18 +596,26 @@ func TestSmartHTTPAppliesCredentialsAuthorizationAndReadinessBeforeGit(t *testin
 		}
 	})
 
-	t.Run("read-scoped API key cannot push", func(t *testing.T) {
+	t.Run("git clone PAT reads but cannot push", func(t *testing.T) {
 		engine := newSmartHTTPTestEngineWithResolver(t, Config{StorageRoot: root, gitBinary: fake.path}, &fakeRepositoryResolver{repositories: map[string]gitservice.Repository{"team-a/plugin-one": private}})
+		read := httptest.NewRecorder()
+		readRequest := httptest.NewRequest(http.MethodPost, "/git/team-a/plugin-one.git/git-upload-pack", strings.NewReader("request"))
+		readRequest.SetBasicAuth("alice", "git-clone-pat")
+		engine.ServeHTTP(read, readRequest)
+		if read.Code != http.StatusOK {
+			t.Fatalf("git-clone PAT read status = %d, want 200", read.Code)
+		}
+
 		before := fake.readLog(t)
-		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/git/team-a/plugin-one.git/git-receive-pack", strings.NewReader("request"))
-		req.SetBasicAuth("alice", "read-only")
-		engine.ServeHTTP(w, req)
-		if w.Code != http.StatusForbidden {
-			t.Fatalf("read-scoped push status = %d, want 403", w.Code)
+		write := httptest.NewRecorder()
+		writeRequest := httptest.NewRequest(http.MethodPost, "/git/team-a/plugin-one.git/git-receive-pack", strings.NewReader("request"))
+		writeRequest.SetBasicAuth("alice", "git-clone-pat")
+		engine.ServeHTTP(write, writeRequest)
+		if write.Code != http.StatusUnauthorized {
+			t.Fatalf("git-clone PAT push status = %d, want 401", write.Code)
 		}
 		if after := fake.readLog(t); after != before {
-			t.Fatalf("scope denied push invoked git; before=%q after=%q", before, after)
+			t.Fatalf("credential denied push invoked git; before=%q after=%q", before, after)
 		}
 	})
 
@@ -559,7 +625,7 @@ func TestSmartHTTPAppliesCredentialsAuthorizationAndReadinessBeforeGit(t *testin
 		engine := newSmartHTTPTestEngineWithResolver(t, Config{StorageRoot: root, gitBinary: fake.path}, &fakeRepositoryResolver{repositories: map[string]gitservice.Repository{"team-a/plugin-one": readOnly}})
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/git/team-a/plugin-one.git/git-receive-pack", strings.NewReader("request"))
-		req.SetBasicAuth("alice", "secret")
+		req.SetBasicAuth("alice", "git-write-pat")
 		engine.ServeHTTP(w, req)
 		if w.Code != http.StatusNotFound {
 			t.Fatalf("read-only write status = %d, want 404", w.Code)
@@ -815,9 +881,9 @@ func TestSmartHTTPValidatesRouteBeforeRepositoryResolution(t *testing.T) {
 	resolverImpl := &fakeRepositoryResolver{repositories: map[string]gitservice.Repository{}}
 	resolver := gitservice.RepositoryResolver(resolverImpl)
 	distributionResolver := distributionservice.Resolver(fakeDistributionResolver{})
-	basicAuthenticator := auth.BasicAuthenticator(fakeGitAuthenticator{})
+	gitPATAuthenticator := auth.GitPATAuthenticator(fakeGitAuthenticator{})
 	authorizer := auth.Authorizer(fakeGitAuthorizer{})
-	hub.Map(&engine, &resolver, &distributionResolver, &basicAuthenticator, &authorizer)
+	hub.Map(&engine, &resolver, &distributionResolver, &gitPATAuthenticator, &authorizer)
 	mod := &Mod{config: Config{StorageRoot: root, gitBinary: fake.path}}
 	if err := mod.Init(&hub); err != nil {
 		t.Fatalf("Mod.Init() error = %v", err)
@@ -849,9 +915,9 @@ func TestSmartHTTPRoutesAllowOnlyPublicReadsAndFailClosedForWrites(t *testing.T)
 		"team-a/plugin-one": {ID: testRepositoryID, Visibility: gitservice.VisibilityPublic, Status: gitservice.StatusReady},
 	}})
 	distributionResolver := distributionservice.Resolver(fakeDistributionResolver{})
-	basicAuthenticator := auth.BasicAuthenticator(fakeGitAuthenticator{})
+	gitPATAuthenticator := auth.GitPATAuthenticator(fakeGitAuthenticator{})
 	authorizer := auth.Authorizer(fakeGitAuthorizer{})
-	hub.Map(&engine, &resolver, &distributionResolver, &basicAuthenticator, &authorizer)
+	hub.Map(&engine, &resolver, &distributionResolver, &gitPATAuthenticator, &authorizer)
 
 	mod := &Mod{}
 	cfg := mod.Config().(*Config)
@@ -919,11 +985,11 @@ func TestRealGitSmartHTTPAuthorizedPushInteroperability(t *testing.T) {
 	}
 	runGitCommand(t, gitBinary, worktree, "add", "README")
 	runGitCommand(t, gitBinary, worktree, "commit", "-m", "initial")
-	runGitCommand(t, gitBinary, worktree, "remote", "add", "origin", strings.Replace(server.URL, "http://", "http://alice:secret@", 1)+"/git/team-a/plugin-one.git")
+	runGitCommand(t, gitBinary, worktree, "remote", "add", "origin", strings.Replace(server.URL, "http://", "http://alice:git-write-pat@", 1)+"/git/team-a/plugin-one.git")
 	runGitCommand(t, gitBinary, worktree, "push", "origin", "HEAD:refs/heads/main")
 
 	cloneDir := filepath.Join(t.TempDir(), "clone")
-	runGitCommand(t, gitBinary, "", "clone", strings.Replace(server.URL, "http://", "http://alice:secret@", 1)+"/git/team-a/plugin-one.git", cloneDir)
+	runGitCommand(t, gitBinary, "", "clone", strings.Replace(server.URL, "http://", "http://alice:git-write-pat@", 1)+"/git/team-a/plugin-one.git", cloneDir)
 	content, err := os.ReadFile(filepath.Join(cloneDir, "README"))
 	if err != nil || string(content) != "private push\n" {
 		t.Fatalf("authorized clone content = %q, err=%v", content, err)
@@ -970,6 +1036,10 @@ func TestRealGitSmartHTTPAnonymousCloneInteroperability(t *testing.T) {
 	}
 }
 
+func basicAuthorization(username, plaintext string) string {
+	return "Basic " + base64.StdEncoding.EncodeToString([]byte(username+":"+plaintext))
+}
+
 func runGitCommand(t *testing.T, gitBinary, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command(gitBinary, args...)
@@ -990,13 +1060,18 @@ func newSmartHTTPTestEngine(t *testing.T, config Config) *jinengine.Engine {
 
 func newSmartHTTPTestEngineWithResolver(t *testing.T, config Config, repositoryResolver gitservice.RepositoryResolver) *jinengine.Engine {
 	t.Helper()
+	return newSmartHTTPTestEngineWithDependencies(t, config, repositoryResolver, fakeGitAuthenticator{})
+}
+
+func newSmartHTTPTestEngineWithDependencies(t *testing.T, config Config, repositoryResolver gitservice.RepositoryResolver, gitPATAuthenticator auth.GitPATAuthenticator) *jinengine.Engine {
+	t.Helper()
 	engine := jinengine.New()
 	hub := kernel.Hub{Injector: inject.New()}
 	resolver := repositoryResolver
 	distributionResolver := distributionservice.Resolver(fakeDistributionResolver{})
-	basicAuthenticator := auth.BasicAuthenticator(fakeGitAuthenticator{})
+	authenticator := gitPATAuthenticator
 	authorizer := auth.Authorizer(fakeGitAuthorizer{})
-	hub.Map(&engine, &resolver, &distributionResolver, &basicAuthenticator, &authorizer)
+	hub.Map(&engine, &resolver, &distributionResolver, &authenticator, &authorizer)
 	mod := &Mod{config: config}
 	if err := mod.Init(&hub); err != nil {
 		t.Fatalf("Mod.Init() error = %v", err)
@@ -1009,7 +1084,7 @@ func newSmartHTTPTestEngineWithResolver(t *testing.T, config Config, repositoryR
 
 type typedNilAuthenticator struct{}
 
-func (*typedNilAuthenticator) AuthenticateBasic(context.Context, string, string) (auth.Principal, error) {
+func (*typedNilAuthenticator) AuthenticateGitPAT(context.Context, string, string, auth.GitOperation) (auth.Principal, error) {
 	return auth.Principal{}, errors.New("not called")
 }
 
@@ -1049,19 +1124,44 @@ func (r *fakeRepositoryResolver) Resolve(_ context.Context, namespace, repositor
 
 var _ gitservice.RepositoryResolver = (*fakeRepositoryResolver)(nil)
 
+type recordingGitPATAuthenticator struct {
+	principal  auth.Principal
+	err        error
+	operations []auth.GitOperation
+}
+
+func (authenticator *recordingGitPATAuthenticator) AuthenticateGitPAT(_ context.Context, _, _ string, operation auth.GitOperation) (auth.Principal, error) {
+	authenticator.operations = append(authenticator.operations, operation)
+	return authenticator.principal, authenticator.err
+}
+
+func gitPATPrincipal(t *testing.T, actions ...auth.Action) auth.Principal {
+	t.Helper()
+	principal, err := auth.NewUserPrincipal("user-alice", "alice", auth.CredentialPAT, auth.RestrictedScopes(actions...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return principal
+}
+
 type fakeGitAuthenticator struct{}
 
-func (fakeGitAuthenticator) AuthenticateBasic(_ context.Context, username, password string) (auth.Principal, error) {
+func (fakeGitAuthenticator) AuthenticateGitPAT(_ context.Context, username, plaintext string, operation auth.GitOperation) (auth.Principal, error) {
 	if username != "alice" {
 		return auth.Principal{}, errors.New("invalid credentials")
 	}
-	switch password {
-	case "secret":
-		return auth.NewUserPrincipal("user-alice", username, auth.CredentialAccountPassword, auth.UnrestrictedScopes())
-	case "read-only":
-		return auth.NewUserPrincipal("user-alice", username, auth.CredentialAPIKey, auth.RestrictedScopes(auth.ActionRepositoryRead))
+	switch plaintext {
+	case "git-write-pat":
+		return auth.NewUserPrincipal("user-alice", username, auth.CredentialPAT, auth.RestrictedScopes(auth.ActionRepositoryRead, auth.ActionRepositoryWrite))
+	case "git-clone-pat":
+		if operation != auth.GitOperationRead {
+			return auth.Principal{}, errors.New("invalid credentials")
+		}
+		return auth.NewUserPrincipal("user-alice", username, auth.CredentialPAT, auth.RestrictedScopes(auth.ActionRepositoryRead))
+	case "sub-read-pat", "account-password", "jwt-token", "wrong", "revoked-pat", "expired-pat", "disabled-user-pat":
+		return auth.Principal{}, errors.New("invalid credentials")
 	default:
-		return auth.Principal{}, errors.New("invalid, revoked, or disabled credentials")
+		return auth.Principal{}, errors.New("invalid credentials")
 	}
 }
 

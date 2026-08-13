@@ -53,6 +53,11 @@ paths:
       responses:
         "200":
           description: A fixed 30-day frontend JWT was issued.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/SecretCacheControl"
+            Pragma:
+              $ref: "#/components/headers/SecretPragma"
           content:
             application/json:
               schema:
@@ -118,10 +123,17 @@ paths:
       responses:
         "201":
           description: Token created; plaintext remains owner-revealable.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/SecretCacheControl"
+            Pragma:
+              $ref: "#/components/headers/SecretPragma"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/CreatedTokenSuccess"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthenticated"
         "403":
@@ -170,6 +182,11 @@ paths:
       responses:
         "200":
           description: Token plaintext and metadata, including inactive status, were returned to its owner.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/SecretCacheControl"
+            Pragma:
+              $ref: "#/components/headers/SecretPragma"
           content:
             application/json:
               schema:
@@ -178,6 +195,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "500":
@@ -749,6 +768,18 @@ components:
       required: true
       schema:
         type: string
+    SecretCacheControl:
+      required: true
+      description: Prevents storage of a secret-bearing response.
+      schema:
+        type: string
+        const: private, no-store
+    SecretPragma:
+      required: true
+      description: Compatibility cache prevention for a secret-bearing response.
+      schema:
+        type: string
+        const: no-cache
 
   responses:
     Unauthenticated:
@@ -788,7 +819,7 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
     BadRequest:
-      description: The required body is missing, too large, unreadable, malformed, or contains a trailing JSON value.
+      description: The required body is missing, too large, unreadable, malformed, top-level null, or contains a trailing JSON value.
       headers:
         X-Request-Id:
           $ref: "#/components/headers/RequestId"

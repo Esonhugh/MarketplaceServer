@@ -40,15 +40,15 @@ func TestPrincipalAndScopeBehavior(t *testing.T) {
 		t.Fatal("unrestricted principal should allow repository.write")
 	}
 
-	apiKeyUser, err := auth.NewUserPrincipal("user-1", "alice", auth.CredentialAPIKey,
+	patUser, err := auth.NewUserPrincipal("user-1", "alice", auth.CredentialPAT,
 		auth.RestrictedScopes(auth.ActionRepositoryRead, auth.ActionPluginRead, auth.ActionRepositoryRead))
 	if err != nil {
 		t.Fatalf("NewUserPrincipal: %v", err)
 	}
-	if !apiKeyUser.Allows(auth.ActionRepositoryRead) || apiKeyUser.Allows(auth.ActionRepositoryWrite) {
+	if !patUser.Allows(auth.ActionRepositoryRead) || patUser.Allows(auth.ActionRepositoryWrite) {
 		t.Fatal("restricted scopes were not enforced")
 	}
-	got := apiKeyUser.Scopes().Actions()
+	got := patUser.Scopes().Actions()
 	if len(got) != 2 || got[0] != auth.ActionPluginRead || got[1] != auth.ActionRepositoryRead {
 		t.Fatalf("normalized scopes = %v", got)
 	}
@@ -78,7 +78,7 @@ func TestPrincipalValidationAndContext(t *testing.T) {
 	if _, ok := auth.PrincipalFromContext(context.Background()); ok {
 		t.Fatal("empty context unexpectedly contained a principal")
 	}
-	principal, err := auth.NewUserPrincipal("user-1", "alice", auth.CredentialAPIKey,
+	principal, err := auth.NewUserPrincipal("user-1", "alice", auth.CredentialJWT,
 		auth.RestrictedScopes(auth.ActionTokenRead))
 	if err != nil {
 		t.Fatalf("NewUserPrincipal: %v", err)
@@ -87,6 +87,14 @@ func TestPrincipalValidationAndContext(t *testing.T) {
 	got, ok := auth.PrincipalFromContext(ctx)
 	if !ok || got.UserID() != principal.UserID() || got.Username() != principal.Username() {
 		t.Fatal("principal did not round trip through context")
+	}
+}
+
+func TestGitOperationValues(t *testing.T) {
+	t.Parallel()
+
+	if auth.GitOperationRead != "read" || auth.GitOperationWrite != "write" {
+		t.Fatalf("Git operations = %q/%q", auth.GitOperationRead, auth.GitOperationWrite)
 	}
 }
 
@@ -109,14 +117,35 @@ func TestApprovedActionValues(t *testing.T) {
 	}
 }
 
+func TestResolvedJWTPATPrincipalsRequireUserID(t *testing.T) {
+	t.Parallel()
+
+	for _, credential := range []auth.CredentialKind{auth.CredentialJWT, auth.CredentialPAT} {
+		principal, err := auth.NewUserPrincipal("user-1", "alice", credential, auth.UnrestrictedScopes())
+		if err != nil || principal.CredentialKind() != credential {
+			t.Fatalf("NewUserPrincipal(%q) = %#v, %v", credential, principal, err)
+		}
+		if _, err := auth.NewUserPrincipal("", "alice", credential, auth.UnrestrictedScopes()); err == nil {
+			t.Fatalf("NewUserPrincipal(%q) accepted unresolved user", credential)
+		}
+	}
+}
+
 var (
-	_ auth.BasicAuthenticator = basicAuthenticatorStub{}
-	_ auth.Authorizer         = authorizerStub{}
+	_ auth.GitPATAuthenticator          = gitPATAuthenticatorStub{}
+	_ auth.SubscriptionPATAuthenticator = subscriptionPATAuthenticatorStub{}
+	_ auth.Authorizer                   = authorizerStub{}
 )
 
-type basicAuthenticatorStub struct{}
+type gitPATAuthenticatorStub struct{}
 
-func (basicAuthenticatorStub) AuthenticateBasic(context.Context, string, string) (auth.Principal, error) {
+func (gitPATAuthenticatorStub) AuthenticateGitPAT(context.Context, string, string, auth.GitOperation) (auth.Principal, error) {
+	return auth.AnonymousPrincipal(), nil
+}
+
+type subscriptionPATAuthenticatorStub struct{}
+
+func (subscriptionPATAuthenticatorStub) AuthenticateSubscriptionPAT(context.Context, string, string) (auth.Principal, error) {
 	return auth.AnonymousPrincipal(), nil
 }
 

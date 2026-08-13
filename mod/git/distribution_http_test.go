@@ -26,12 +26,16 @@ func TestPublicDistributionRoutesAllowOnlyUploadPack(t *testing.T) {
 
 	base := "/distribution/plugins/" + id.String() + ".git"
 	advertisement := httptest.NewRecorder()
-	engine.ServeHTTP(advertisement, httptest.NewRequest(http.MethodGet, base+"/info/refs?service=git-upload-pack", nil))
+	advertisementRequest := httptest.NewRequest(http.MethodGet, base+"/info/refs?service=git-upload-pack", nil)
+	advertisementRequest.Header.Set("Authorization", "Bearer ignored-on-public-distribution")
+	engine.ServeHTTP(advertisement, advertisementRequest)
 	if advertisement.Code != http.StatusOK || reader.advertiseCalls != 1 {
 		t.Fatalf("advertisement status/calls = %d/%d", advertisement.Code, reader.advertiseCalls)
 	}
 	result := httptest.NewRecorder()
-	engine.ServeHTTP(result, httptest.NewRequest(http.MethodPost, base+"/git-upload-pack", strings.NewReader("request")))
+	resultRequest := httptest.NewRequest(http.MethodPost, base+"/git-upload-pack", strings.NewReader("request"))
+	resultRequest.SetBasicAuth("alice", "ignored-on-public-distribution")
+	engine.ServeHTTP(result, resultRequest)
 	if result.Code != http.StatusOK || reader.uploadCalls != 1 {
 		t.Fatalf("upload status/calls = %d/%d", result.Code, reader.uploadCalls)
 	}

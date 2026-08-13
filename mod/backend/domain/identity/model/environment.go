@@ -1,10 +1,11 @@
-package identity
+package model
 
 import "os"
 
 const (
 	BootstrapAdminPasswordEnvironment = "MARKETPLACE_BOOTSTRAP_ADMIN_PASSWORD"
 	APIKeyPepperEnvironment           = "MARKETPLACE_API_KEY_PEPPER"
+	JWTSecretEnvironment              = "MARKETPLACE_JWT_SECRET"
 )
 
 type Environment interface {

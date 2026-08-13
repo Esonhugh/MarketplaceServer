@@ -5,19 +5,20 @@ import (
 	"testing"
 
 	distributiondomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/distribution"
-	identitydomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity"
+	identitydao "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/dao"
+	identitymodel "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/model"
 )
 
 func TestAggregateMigrationDependenciesAreIdentityFirst(t *testing.T) {
-	identityNamespace := reflect.TypeOf(&identitydomain.Namespace{})
+	identityNamespace := reflect.TypeOf(&identitymodel.Namespace{})
 	distributionModels := distributiondomain.MigrationModels()
 	for _, model := range distributionModels {
 		if reflect.TypeOf(model) == identityNamespace {
 			t.Fatal("distribution migration models duplicate canonical identity Namespace")
 		}
 	}
-	identityModels := identitydomain.MigrationModels()
-	if got := reflect.TypeOf(identityModels[0]); got != reflect.TypeOf(&identitydomain.User{}) {
+	identityModels := identitydao.MigrationModels()
+	if got := reflect.TypeOf(identityModels[0]); got != reflect.TypeOf(&identitymodel.User{}) {
 		t.Fatalf("first identity model = %v", got)
 	}
 	if got := reflect.TypeOf(distributionModels[0]); got != reflect.TypeOf(&distributiondomain.Repository{}) {

@@ -10,7 +10,9 @@ import (
 	"testing"
 
 	"github.com/Esonhugh/MarketplaceServer/core/kernel"
-	identitydomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity"
+	identitydao "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/dao"
+	identitymodel "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/model"
+	identityservice "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/service"
 	"github.com/Esonhugh/MarketplaceServer/pkg/auth"
 	"github.com/Esonhugh/MarketplaceServer/pkg/gitservice"
 	"github.com/juanjiTech/inject/v2"
@@ -31,9 +33,11 @@ func TestModName(t *testing.T) {
 	}
 }
 
-func TestConfigIsAbsentUntilBackendHasConfiguration(t *testing.T) {
-	if got := (&Mod{}).Config(); got != nil {
-		t.Fatalf("Config() = %#v, want nil for the configuration-free skeleton", got)
+func TestConfigExposesJWTSecret(t *testing.T) {
+	mod := &Mod{}
+	config, ok := mod.Config().(*Config)
+	if !ok || config != &mod.config {
+		t.Fatalf("Config() = %#v, want backend config pointer", mod.Config())
 	}
 }
 
@@ -109,7 +113,7 @@ func TestPostInitStopsBeforeAssemblyWhenMigrationFails(t *testing.T) {
 	projectionBuilder := gitservice.ProjectionBuilder(&fakeProjectionBuilder{})
 	hub.Map(&engine, &db, &repoSvc, &projectionBuilder)
 
-	m := &Mod{migrate: func(*gorm.DB) error { return errors.New("migration failed") }}
+	m := &Mod{config: Config{JWTSecret: "test JWT secret"}, migrate: func(*gorm.DB) error { return errors.New("migration failed") }}
 	err := m.PostInit(hub)
 	if err == nil || !strings.Contains(err.Error(), "database migration failed") {
 		t.Fatalf("PostInit() error = %v, want migration failure", err)
@@ -211,7 +215,7 @@ func TestLoadRegistersBackendHealthEndpoint(t *testing.T) {
 	if got := w.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
 		t.Fatalf("Content-Type = %q, want application/json", got)
 	}
-	if got, want := w.Body.String(), `{"status":"ok","checks":[{"name":"backend","status":"ok"}]}`; got != want {
+	if got, want := w.Body.String(), `{"data":{"status":"ok","checks":[{"name":"backend","status":"ok"}]}}`; got != want {
 		t.Fatalf("body = %s, want %s", got, want)
 	}
 }
@@ -304,11 +308,22 @@ func TestLoadFailsFastWithoutAssemblyAndIsIdempotent(t *testing.T) {
 
 func testMod() *Mod {
 	return &Mod{
-		environment: identitydomain.MapEnvironment{identitydomain.APIKeyPepperEnvironment: "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE="},
+		config:      Config{JWTSecret: "test JWT secret"},
+		environment: identitymodel.MapEnvironment{identitymodel.APIKeyPepperEnvironment: "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE="},
 		migrate:     func(*gorm.DB) error { return nil },
-		initializeIdentity: func(context.Context, *gorm.DB, identitydomain.Environment) (identitydomain.Services, error) {
-			repository, _ := identitydomain.NewRepository(&gorm.DB{})
-			return identitydomain.Services{Repository: repository, Authenticator: &fakeBasicAuthenticator{}}, nil
+		initializeIdentity: func(_ context.Context, _ *gorm.DB, _ identitymodel.Environment, jwtSecret string) (identityservice.Services, error) {
+			repository, _ := identitydao.NewRepository(&gorm.DB{})
+			account, _ := identityservice.NewAccountService(repository)
+			jwtService, _ := identityservice.NewJWTService(jwtSecret)
+			pat := &fakePATAuthenticator{}
+			return identityservice.Services{
+				Repository:      repository,
+				Account:         account,
+				Login:           identityservice.NewLoginService(account, jwtService),
+				JWT:             jwtService,
+				GitPAT:          pat,
+				SubscriptionPAT: pat,
+			}, nil
 		},
 	}
 }
@@ -345,13 +360,20 @@ func (*fakeProjectionBuilder) VerifyProjection(context.Context, gitservice.Immut
 
 var _ gitservice.ProjectionBuilder = (*fakeProjectionBuilder)(nil)
 
-type fakeBasicAuthenticator struct{}
+type fakePATAuthenticator struct{}
 
-func (*fakeBasicAuthenticator) AuthenticateBasic(context.Context, string, string) (auth.Principal, error) {
+func (*fakePATAuthenticator) AuthenticateGitPAT(context.Context, string, string, auth.GitOperation) (auth.Principal, error) {
 	return auth.Principal{}, errors.New("not implemented in fake")
 }
 
-var _ auth.BasicAuthenticator = (*fakeBasicAuthenticator)(nil)
+func (*fakePATAuthenticator) AuthenticateSubscriptionPAT(context.Context, string, string) (auth.Principal, error) {
+	return auth.Principal{}, errors.New("not implemented in fake")
+}
+
+var (
+	_ auth.GitPATAuthenticator          = (*fakePATAuthenticator)(nil)
+	_ auth.SubscriptionPATAuthenticator = (*fakePATAuthenticator)(nil)
+)
 
 type fakeRepositoryService struct{}
 

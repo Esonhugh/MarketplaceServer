@@ -11,7 +11,8 @@ import (
 	"github.com/Esonhugh/MarketplaceServer/core/kernel"
 	authorizationdomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/authorization"
 	distributiondomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/distribution"
-	identitydomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity"
+	identitymodel "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/model"
+	identityservice "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/service"
 	distributionhandler "github.com/Esonhugh/MarketplaceServer/mod/backend/handler/distribution"
 	identityhandler "github.com/Esonhugh/MarketplaceServer/mod/backend/handler/identity"
 	"github.com/Esonhugh/MarketplaceServer/pkg/api"
@@ -28,9 +29,14 @@ var (
 	_ gitservice.RepositoryResolver = (*Mod)(nil)
 )
 
+type Config struct {
+	JWTSecret string `yaml:"jwtSecret" mapstructure:"jwtSecret"`
+}
+
 type Mod struct {
 	kernel.UnimplementedModule
 
+	config                 Config
 	jin                    *jin.Engine
 	db                     *gorm.DB
 	git                    gitservice.RepositoryService
@@ -39,17 +45,19 @@ type Mod struct {
 	publicationService     *distributiondomain.PublicationService
 	accessService          *distributiondomain.AccessService
 	userMarketplaceService *distributiondomain.UserMarketplaceService
-	tokenService           *identitydomain.TokenService
-	basicAuthenticator     auth.BasicAuthenticator
-	environment            identitydomain.Environment
-	initializeIdentity     func(context.Context, *gorm.DB, identitydomain.Environment) (identitydomain.Services, error)
+	tokenService           *identityservice.TokenService
+	loginService           *identityservice.LoginService
+	managementAuth         identityhandler.ManagementAuthenticator
+	subscriptionPAT        auth.SubscriptionPATAuthenticator
+	environment            identitymodel.Environment
+	initializeIdentity     func(context.Context, *gorm.DB, identitymodel.Environment, string) (identityservice.Services, error)
 	migrate                func(*gorm.DB) error
 	loadOnce               sync.Once
 }
 
 func (m *Mod) Name() string { return "backend" }
 
-func (m *Mod) Config() any { return nil }
+func (m *Mod) Config() any { return &m.config }
 
 func (m *Mod) PostInit(hub *kernel.Hub) error {
 	var engine *jin.Engine
@@ -84,6 +92,14 @@ func (m *Mod) PostInit(hub *kernel.Hub) error {
 		return fmt.Errorf("backend dependency gitservice.ProjectionBuilder not available: nil")
 	}
 
+	environment := m.environment
+	if environment == nil {
+		environment = identitymodel.OSEnvironment{}
+	}
+	jwtSecret, err := identityservice.JWTSecret(environment, m.config.JWTSecret)
+	if err != nil {
+		return fmt.Errorf("backend JWT configuration invalid: %w", err)
+	}
 	migrate := m.migrate
 	if migrate == nil {
 		migrate = Migrate
@@ -95,34 +111,28 @@ func (m *Mod) PostInit(hub *kernel.Hub) error {
 	if err != nil {
 		return fmt.Errorf("assemble distribution repository: %w", err)
 	}
-	environment := m.environment
-	if environment == nil {
-		environment = identitydomain.OSEnvironment{}
-	}
 	initializeIdentity := m.initializeIdentity
 	if initializeIdentity == nil {
-		initializeIdentity = identitydomain.Initialize
+		initializeIdentity = identityservice.Initialize
 	}
-	identityServices, err := initializeIdentity(context.Background(), db, environment)
+	identityServices, err := initializeIdentity(context.Background(), db, environment, jwtSecret)
 	if err != nil {
 		return fmt.Errorf("assemble identity services: %w", err)
 	}
-	if identityServices.Repository == nil {
-		return fmt.Errorf("assemble identity services: nil repository")
-	}
-	if isNil(identityServices.Authenticator) {
-		return fmt.Errorf("assemble identity services: nil basic authenticator")
+	if identityServices.Repository == nil || identityServices.Account == nil || identityServices.Login == nil || identityServices.JWT == nil ||
+		isNil(identityServices.GitPAT) || isNil(identityServices.SubscriptionPAT) {
+		return fmt.Errorf("assemble identity services: incomplete service set")
 	}
 	stateReader, err := authorizationdomain.NewGORMIdentityStateReader(db, identityServices.Repository)
 	if err != nil {
 		return fmt.Errorf("assemble authorization state reader: %w", err)
 	}
 	authorizer := authorizationdomain.NewPolicy(stateReader)
-	pepper, err := identitydomain.APIKeyPepper(environment)
+	pepper, err := identitymodel.APIKeyPepper(environment)
 	if err != nil {
 		return fmt.Errorf("load API key pepper for token service: %w", err)
 	}
-	tokenService, err := identitydomain.NewTokenService(identityServices.Repository, authorizer, pepper)
+	tokenService, err := identityservice.NewTokenService(identityServices.Repository, authorizer, pepper)
 	if err != nil {
 		return fmt.Errorf("assemble token service: %w", err)
 	}
@@ -144,12 +154,14 @@ func (m *Mod) PostInit(hub *kernel.Hub) error {
 	m.accessService = accessService
 	m.userMarketplaceService = userMarketplaceService
 	m.tokenService = tokenService
-	m.basicAuthenticator = identityServices.Authenticator
+	m.loginService = identityServices.Login
+	m.managementAuth = identityhandler.NewManagementAuthenticator(identityServices.JWT, identityServices.Account)
+	m.subscriptionPAT = identityServices.SubscriptionPAT
 	var repositoryResolver gitservice.RepositoryResolver = m
 	var distributionResolver distributionservice.Resolver = accessService
-	var basicAuthenticator auth.BasicAuthenticator = identityServices.Authenticator
+	var gitPATAuthenticator auth.GitPATAuthenticator = identityServices.GitPAT
 	var policyAuthorizer auth.Authorizer = authorizer
-	hub.Map(&repositoryResolver, &distributionResolver, &basicAuthenticator, &policyAuthorizer)
+	hub.Map(&repositoryResolver, &distributionResolver, &gitPATAuthenticator, &policyAuthorizer)
 	return nil
 }
 
@@ -197,24 +209,26 @@ func (m *Mod) resolveRepository(ctx context.Context, namespaceSlug, repositorySl
 }
 
 func (m *Mod) Load(_ *kernel.Hub) error {
-	if m.jin == nil || m.db == nil || isNil(m.git) || m.tokenService == nil || m.userMarketplaceService == nil || isNil(m.basicAuthenticator) {
+	if m.jin == nil || m.db == nil || isNil(m.git) || m.tokenService == nil || m.loginService == nil ||
+		m.userMarketplaceService == nil || isNil(m.managementAuth) || isNil(m.subscriptionPAT) {
 		return fmt.Errorf("backend dependencies are not assembled; call PostInit after jin, sql, and git dependencies are mapped")
 	}
 
 	m.loadOnce.Do(func() {
 		m.jin.GET("/api/v1/health", m.handleHealth)
 		distributionhandler.NewMarketplaceJSONHandler(m.accessService).Register(m.jin)
-		distributionhandler.NewUserMarketplaceJSONHandler(m.basicAuthenticator, m.userMarketplaceService).Register(m.jin)
-		identityhandler.NewTokenHandler(m.tokenService, m.basicAuthenticator).Register(m.jin)
+		distributionhandler.NewUserMarketplaceJSONHandler(m.subscriptionPAT, m.userMarketplaceService).Register(m.jin)
+		identityhandler.NewLoginHandler(m.loginService).Register(m.jin)
+		identityhandler.NewTokenHandler(m.tokenService, m.managementAuth).Register(m.jin)
 	})
 	return nil
 }
 
 func (m *Mod) handleHealth(c *jin.Context) {
-	c.Render(http.StatusOK, render.JSON{Data: api.NewHealth(
+	c.Render(http.StatusOK, render.JSON{Data: api.Success(api.NewHealth(
 		api.HealthStatusOK,
 		api.HealthCheck{Name: "backend", Status: api.HealthStatusOK},
-	)})
+	))})
 }
 
 func isNil(value any) bool {

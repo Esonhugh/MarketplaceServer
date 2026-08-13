@@ -2,34 +2,37 @@ package identity
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	identitydomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity"
-	"github.com/Esonhugh/MarketplaceServer/pkg/api"
+	identityservice "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/service"
 	"github.com/Esonhugh/MarketplaceServer/pkg/auth"
 	"github.com/google/uuid"
 	"github.com/juanjiTech/jin"
-	"github.com/juanjiTech/jin/render"
 )
 
+const bearerChallenge = `Bearer realm="MarketplaceServer Management"`
+
+type ManagementAuthenticator interface {
+	AuthenticateBearer(context.Context, string) (auth.Principal, error)
+}
+
 type TokenLifecycle interface {
-	Create(context.Context, auth.Principal, identitydomain.CreateTokenInput) (identitydomain.CreatedToken, error)
-	List(context.Context, auth.Principal, int, string) (identitydomain.TokenPage, error)
+	Create(context.Context, auth.Principal, identityservice.CreateTokenInput) (identityservice.CreatedToken, error)
+	List(context.Context, auth.Principal, int, int) (identityservice.TokenPage, error)
+	Reveal(context.Context, auth.Principal, string, string) (identityservice.CreatedToken, error)
 	Revoke(context.Context, auth.Principal, string) error
 }
 
 type TokenHandler struct {
 	service       TokenLifecycle
-	authenticator auth.BasicAuthenticator
+	authenticator ManagementAuthenticator
 }
 
-func NewTokenHandler(service TokenLifecycle, authenticator auth.BasicAuthenticator) *TokenHandler {
+func NewTokenHandler(service TokenLifecycle, authenticator ManagementAuthenticator) *TokenHandler {
 	return &TokenHandler{service: service, authenticator: authenticator}
 }
 
@@ -37,135 +40,183 @@ func (handler *TokenHandler) Register(engine *jin.Engine) {
 	engine.GET("/api/v1/me/tokens", handler.List)
 	engine.POST("/api/v1/me/tokens", handler.Create)
 	engine.DELETE("/api/v1/me/tokens/:tokenId", handler.Delete)
+	engine.POST("/api/v1/me/tokens/:tokenId/reveal", handler.Reveal)
 }
 
 type createTokenRequest struct {
-	Name      string        `json:"name"`
-	Scopes    []auth.Action `json:"scopes"`
-	ExpiresAt *time.Time    `json:"expiresAt"`
+	Name      string     `json:"name"`
+	Preset    string     `json:"preset"`
+	ExpiresAt *time.Time `json:"expiresAt"`
 }
 
-type createTokenResponse struct {
-	identitydomain.TokenMetadata
-	Token string `json:"token"`
+type revealTokenRequest struct {
+	Password string `json:"password"`
 }
 
 func (handler *TokenHandler) Create(c *jin.Context) {
-	principal, requestID, ok := handler.authenticate(c)
+	principal, ok := handler.authenticate(c)
 	if !ok {
 		return
 	}
 	var request createTokenRequest
-	decoder := json.NewDecoder(http.MaxBytesReader(c.Writer, c.Request.Body, 64<<10))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request); err != nil {
-		handler.renderError(c, http.StatusUnprocessableEntity, "validation_failed", "request body is invalid", requestID)
+	if err := decodeJSONBody(c, &request); err != nil {
+		renderAPIError(c, http.StatusBadRequest, "bad_request", "request body is invalid")
 		return
 	}
-	var trailing json.RawMessage
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		handler.renderError(c, http.StatusUnprocessableEntity, "validation_failed", "request body is invalid", requestID)
-		return
-	}
-	created, err := handler.service.Create(c.Request.Context(), principal, identitydomain.CreateTokenInput{
-		Name: request.Name, Scopes: request.Scopes, ExpiresAt: request.ExpiresAt,
+	created, err := handler.service.Create(c.Request.Context(), principal, identityservice.CreateTokenInput{
+		Name: request.Name, Preset: request.Preset, ExpiresAt: request.ExpiresAt,
 	})
 	if err != nil {
-		handler.renderServiceError(c, err, requestID)
+		handler.renderServiceError(c, err)
 		return
 	}
-	c.Writer.Header().Set("Cache-Control", "private, no-store")
-	c.Writer.Header().Set("Pragma", "no-cache")
-	c.Render(http.StatusCreated, render.JSON{Data: api.Success(createTokenResponse{TokenMetadata: created.TokenMetadata, Token: created.Plaintext})})
+	setSecretCacheHeaders(c)
+	renderSuccess(c, http.StatusCreated, createdTokenResponse(created))
 }
 
 func (handler *TokenHandler) List(c *jin.Context) {
-	principal, requestID, ok := handler.authenticate(c)
+	principal, ok := handler.authenticate(c)
 	if !ok {
 		return
 	}
-	limit, err := parseLimit(c.Request.URL.Query().Get("limit"))
+	page, err := parsePage(c.Request.URL.Query().Get("page"))
 	if err != nil {
-		handler.renderError(c, http.StatusUnprocessableEntity, "validation_failed", "limit must be a positive integer", requestID)
+		renderAPIError(c, http.StatusUnprocessableEntity, "validation_failed", "page must be a positive integer")
 		return
 	}
-	cursor := c.Request.URL.Query().Get("cursor")
-	if len(cursor) > identitydomain.MaximumTokenCursorBytes {
-		handler.renderError(c, http.StatusUnprocessableEntity, "validation_failed", "request is invalid", requestID)
-		return
-	}
-	page, err := handler.service.List(c.Request.Context(), principal, limit, cursor)
+	size, err := parseSize(c.Request.URL.Query().Get("size"))
 	if err != nil {
-		handler.renderServiceError(c, err, requestID)
+		renderAPIError(c, http.StatusUnprocessableEntity, "validation_failed", "size must be between 1 and 100")
 		return
 	}
-	c.Render(http.StatusOK, render.JSON{Data: api.CursorList(page.Items, page.NextCursor)})
+	result, err := handler.service.List(c.Request.Context(), principal, page, size)
+	if err != nil {
+		handler.renderServiceError(c, err)
+		return
+	}
+	if result.Items == nil {
+		result.Items = []identityservice.TokenMetadata{}
+	}
+	renderSuccess(c, http.StatusOK, result)
 }
 
 func (handler *TokenHandler) Delete(c *jin.Context) {
-	principal, requestID, ok := handler.authenticate(c)
+	principal, ok := handler.authenticate(c)
 	if !ok {
 		return
 	}
-	if err := handler.service.Revoke(c.Request.Context(), principal, c.Params.ByName("tokenId")); err != nil {
-		handler.renderServiceError(c, err, requestID)
+	tokenID := c.Params.ByName("tokenId")
+	if !isCanonicalUUID(tokenID) {
+		renderAPIError(c, http.StatusNotFound, "not_found", "token not found")
+		return
+	}
+	if err := handler.service.Revoke(c.Request.Context(), principal, tokenID); err != nil {
+		handler.renderServiceError(c, err)
 		return
 	}
 	c.Writer.WriteHeader(http.StatusNoContent)
 }
 
-func (handler *TokenHandler) authenticate(c *jin.Context) (auth.Principal, string, bool) {
-	requestID := requestID(c)
-	username, credential, ok := c.Request.BasicAuth()
-	if !ok || username == "" || credential == "" {
-		c.Writer.Header().Set("WWW-Authenticate", `Basic realm="MarketplaceServer"`)
-		handler.renderError(c, http.StatusUnauthorized, "unauthenticated", "authentication is required", requestID)
-		return auth.Principal{}, requestID, false
+func (handler *TokenHandler) Reveal(c *jin.Context) {
+	principal, ok := handler.authenticate(c)
+	if !ok {
+		return
 	}
-	principal, err := handler.authenticator.AuthenticateBasic(c.Request.Context(), username, credential)
+	tokenID := c.Params.ByName("tokenId")
+	if !isCanonicalUUID(tokenID) {
+		renderAPIError(c, http.StatusNotFound, "not_found", "token not found")
+		return
+	}
+	var request revealTokenRequest
+	if err := decodeJSONBody(c, &request); err != nil {
+		renderAPIError(c, http.StatusBadRequest, "bad_request", "request body is invalid")
+		return
+	}
+	if request.Password == "" {
+		renderAPIError(c, http.StatusUnauthorized, "unauthenticated", "authentication failed")
+		return
+	}
+	revealed, err := handler.service.Reveal(c.Request.Context(), principal, tokenID, request.Password)
 	if err != nil {
-		c.Writer.Header().Set("WWW-Authenticate", `Basic realm="MarketplaceServer"`)
-		handler.renderError(c, http.StatusUnauthorized, "unauthenticated", "authentication is required", requestID)
-		return auth.Principal{}, requestID, false
+		if errors.Is(err, identityservice.ErrInvalidCredentials) {
+			renderAPIError(c, http.StatusUnauthorized, "unauthenticated", "authentication failed")
+			return
+		}
+		handler.renderServiceError(c, err)
+		return
 	}
-	return principal, requestID, true
+	setSecretCacheHeaders(c)
+	renderSuccess(c, http.StatusOK, createdTokenResponse(revealed))
 }
 
-func (handler *TokenHandler) renderServiceError(c *jin.Context, err error, requestID string) {
+func (handler *TokenHandler) authenticate(c *jin.Context) (auth.Principal, bool) {
+	header := c.Request.Header.Get("Authorization")
+	parts := strings.Fields(header)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
+		c.Writer.Header().Set("WWW-Authenticate", bearerChallenge)
+		renderAPIError(c, http.StatusUnauthorized, "unauthenticated", "authentication is required")
+		return auth.Principal{}, false
+	}
+	principal, err := handler.authenticator.AuthenticateBearer(c.Request.Context(), parts[1])
+	if err != nil || !principal.IsUser() || principal.CredentialKind() != auth.CredentialJWT {
+		c.Writer.Header().Set("WWW-Authenticate", bearerChallenge)
+		renderAPIError(c, http.StatusUnauthorized, "unauthenticated", "authentication is required")
+		return auth.Principal{}, false
+	}
+	return principal, true
+}
+
+func (handler *TokenHandler) renderServiceError(c *jin.Context, err error) {
 	switch {
-	case errors.Is(err, identitydomain.ErrTokenAuthorization):
-		handler.renderError(c, http.StatusForbidden, "forbidden", "permission denied", requestID)
-	case errors.Is(err, identitydomain.ErrTokenNotFound):
-		handler.renderError(c, http.StatusNotFound, "not_found", "token not found", requestID)
-	case errors.Is(err, identitydomain.ErrInvalidTokenInput), errors.Is(err, identitydomain.ErrTokenScopeNotAllowed), errors.Is(err, identitydomain.ErrInvalidTokenCursor):
-		handler.renderError(c, http.StatusUnprocessableEntity, "validation_failed", "request is invalid", requestID)
+	case errors.Is(err, identityservice.ErrTokenAuthorization):
+		renderAPIError(c, http.StatusForbidden, "forbidden", "permission denied")
+	case errors.Is(err, identityservice.ErrTokenNotFound):
+		renderAPIError(c, http.StatusNotFound, "not_found", "token not found")
+	case errors.Is(err, identityservice.ErrInvalidTokenInput):
+		renderAPIError(c, http.StatusUnprocessableEntity, "validation_failed", "request is invalid")
 	default:
-		handler.renderError(c, http.StatusInternalServerError, "internal_error", "internal server error", requestID)
+		renderAPIError(c, http.StatusInternalServerError, "internal_error", "internal server error")
 	}
 }
 
-func (handler *TokenHandler) renderError(c *jin.Context, status int, code, message, requestID string) {
-	c.Writer.Header().Set("X-Request-Id", requestID)
-	c.Render(status, render.JSON{Data: api.NewError(code, message, requestID)})
-}
-
-func requestID(c *jin.Context) string {
-	if candidate := strings.TrimSpace(c.Request.Header.Get("X-Request-Id")); candidate != "" && len(candidate) <= 128 {
-		return candidate
-	}
-	return uuid.NewString()
-}
-
-func parseLimit(value string) (int, error) {
+func parsePage(value string) (int, error) {
 	if value == "" {
-		return identitydomain.DefaultTokenListLimit, nil
+		return 1, nil
 	}
-	limit, err := strconv.Atoi(value)
-	if err != nil || limit <= 0 {
-		return 0, errors.New("invalid limit")
+	page, err := strconv.Atoi(value)
+	if err != nil || page < 1 {
+		return 0, errors.New("invalid page")
 	}
-	if limit > identitydomain.MaximumTokenListLimit {
-		return identitydomain.MaximumTokenListLimit, nil
+	return page, nil
+}
+
+func parseSize(value string) (int, error) {
+	if value == "" {
+		return identityservice.DefaultTokenListSize, nil
 	}
-	return limit, nil
+	size, err := strconv.Atoi(value)
+	if err != nil || size < 1 || size > identityservice.MaximumTokenListSize {
+		return 0, errors.New("invalid size")
+	}
+	return size, nil
+}
+
+func isCanonicalUUID(value string) bool {
+	parsed, err := uuid.Parse(value)
+	return err == nil && parsed.String() == value
+}
+
+func createdTokenResponse(created identityservice.CreatedToken) struct {
+	identityservice.TokenMetadata
+	Token string `json:"token"`
+} {
+	return struct {
+		identityservice.TokenMetadata
+		Token string `json:"token"`
+	}{TokenMetadata: created.TokenMetadata, Token: created.Token}
+}
+
+func setSecretCacheHeaders(c *jin.Context) {
+	c.Writer.Header().Set("Cache-Control", "private, no-store")
+	c.Writer.Header().Set("Pragma", "no-cache")
 }

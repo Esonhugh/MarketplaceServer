@@ -1,4 +1,4 @@
-package identity
+package dao
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/model"
 	"github.com/Esonhugh/MarketplaceServer/pkg/auth"
 	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
@@ -38,21 +39,21 @@ func TestPostgresIdentityConstraints(t *testing.T) {
 	}
 
 	ownerID := user.ID
-	namespace := Namespace{ID: uuid.NewString(), Kind: NamespaceKindUser, Slug: user.Username, DisplayName: user.DisplayName, OwnerUserID: &ownerID}
+	namespace := model.Namespace{ID: uuid.NewString(), Kind: model.NamespaceKindUser, Slug: user.Username, DisplayName: user.DisplayName, OwnerUserID: &ownerID}
 	if err := db.Create(&namespace).Error; err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}
-	secondNamespace := Namespace{ID: uuid.NewString(), Kind: NamespaceKindUser, Slug: user.Username + "-2", DisplayName: user.DisplayName, OwnerUserID: &ownerID}
+	secondNamespace := model.Namespace{ID: uuid.NewString(), Kind: model.NamespaceKindUser, Slug: user.Username + "-2", DisplayName: user.DisplayName, OwnerUserID: &ownerID}
 	if err := db.Create(&secondNamespace).Error; err == nil {
 		t.Fatal("second personal namespace owner row was accepted")
 	}
-	if err := db.Create(&UserGroupMembership{UserID: user.ID, GroupID: DefaultSystemGroupID}).Error; !errors.Is(err, ErrPersistedDefaultMembership) {
+	if err := db.Create(&model.UserGroupMembership{UserID: user.ID, GroupID: model.DefaultSystemGroupID}).Error; !errors.Is(err, model.ErrPersistedDefaultMembership) {
 		t.Fatalf("persisted default group membership error = %v", err)
 	}
-	if err := db.Exec("INSERT INTO user_group_memberships (user_id, group_id, created_at) VALUES (?, ?, ?)", user.ID, DefaultSystemGroupID, time.Now().UTC()).Error; err == nil {
+	if err := db.Exec("INSERT INTO user_group_memberships (user_id, group_id, created_at) VALUES (?, ?, ?)", user.ID, model.DefaultSystemGroupID, time.Now().UTC()).Error; err == nil {
 		t.Fatal("database accepted default membership when GORM hooks were bypassed")
 	}
-	if err := db.Exec("INSERT INTO users (id, username, display_name, status, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)", uuid.NewString(), "UPPER", "Upper", UserStatusActive, user.PasswordHash, time.Now().UTC(), time.Now().UTC()).Error; err == nil {
+	if err := db.Exec("INSERT INTO users (id, username, display_name, status, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)", uuid.NewString(), "UPPER", "Upper", model.UserStatusActive, user.PasswordHash, time.Now().UTC(), time.Now().UTC()).Error; err == nil {
 		t.Fatal("database accepted non-canonical username when GORM hooks were bypassed")
 	}
 	if err := db.Exec("UPDATE users SET username = ? WHERE id = ?", "renamed", user.ID).Error; err == nil {
@@ -61,20 +62,29 @@ func TestPostgresIdentityConstraints(t *testing.T) {
 	if err := db.Exec("UPDATE namespaces SET slug = ? WHERE id = ?", "renamed", namespace.ID).Error; err == nil {
 		t.Fatal("database accepted immutable namespace update when GORM hooks were bypassed")
 	}
-	token := PersonalAccessToken{ID: uuid.NewString(), UserID: user.ID, Name: "postgres", SecretHMAC: "postgres-index"}
+	plaintext, err := auth.GenerateAPIKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretHMAC, err := auth.IndexAPIKey(plaintext, []byte("01234567890123456789012345678901"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := model.PersonalAccessToken{ID: uuid.NewString(), UserID: user.ID, Name: "postgres", Preset: model.TokenPresetGitClone, SecretPlaintext: plaintext, SecretHMAC: secretHMAC}
 	if err := db.Create(&token).Error; err != nil {
 		t.Fatalf("create token: %v", err)
 	}
-	if err := db.Create(&PersonalAccessTokenScope{TokenID: token.ID, Action: auth.ActionRepositoryRead}).Error; err != nil {
-		t.Fatalf("create normalized token scope: %v", err)
+	if err := db.Exec("INSERT INTO personal_access_tokens (id, user_id, name, preset, secret_plaintext, secret_hmac, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", uuid.NewString(), user.ID, "invalid", "unknown", "mpsk_invalid", "invalid-index", time.Now().UTC(), time.Now().UTC()).Error; err == nil {
+		t.Fatal("database accepted unsupported token preset when GORM hooks were bypassed")
 	}
-	if err := db.Exec("INSERT INTO personal_access_token_scopes (token_id, action) VALUES (?, ?)", token.ID, "unknown.action").Error; err == nil {
-		t.Fatal("database accepted unsupported token scope when GORM hooks were bypassed")
+	createdAt := time.Now().UTC()
+	if err := db.Exec("INSERT INTO personal_access_tokens (id, user_id, name, preset, secret_plaintext, secret_hmac, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", uuid.NewString(), user.ID, "invalid-expiry", model.TokenPresetGitClone, plaintext, "different-"+secretHMAC, createdAt, createdAt, createdAt).Error; err == nil {
+		t.Fatal("database accepted personal access token expiry equal to creation when GORM hooks were bypassed")
 	}
-	if err := db.Exec("UPDATE system_groups SET description = ? WHERE id = ?", "tampered", AdminSystemGroupID).Error; err == nil {
+	if err := db.Exec("UPDATE system_groups SET description = ? WHERE id = ?", "tampered", model.AdminSystemGroupID).Error; err == nil {
 		t.Fatal("database accepted fixed group update when GORM hooks were bypassed")
 	}
-	if err := db.Exec("DELETE FROM system_groups WHERE id = ?", AdminSystemGroupID).Error; err == nil {
+	if err := db.Exec("DELETE FROM system_groups WHERE id = ?", model.AdminSystemGroupID).Error; err == nil {
 		t.Fatal("database accepted fixed group delete when GORM hooks were bypassed")
 	}
 }
@@ -93,7 +103,7 @@ func TestPostgresIdentityRepositorySemantics(t *testing.T) {
 	if err != nil || !member {
 		t.Fatalf("active user default membership = %v, %v", member, err)
 	}
-	if err := db.Model(&user).Update("status", UserStatusDisabled).Error; err != nil {
+	if err := db.Model(&user).Update("status", model.UserStatusDisabled).Error; err != nil {
 		t.Fatal(err)
 	}
 	member, err = repository.IsDefaultMember(context.Background(), user.ID)
@@ -102,9 +112,22 @@ func TestPostgresIdentityRepositorySemantics(t *testing.T) {
 	}
 
 	now := time.Now().UTC()
-	for name, token := range map[string]PersonalAccessToken{
-		"revoked": {ID: uuid.NewString(), UserID: user.ID, Name: "revoked", SecretHMAC: "revoked", RevokedAt: &now},
-		"expired": {ID: uuid.NewString(), UserID: user.ID, Name: "expired", SecretHMAC: "expired", ExpiresAt: &now},
+	newToken := func(name string) model.PersonalAccessToken {
+		plaintext, err := auth.GenerateAPIKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		secretHMAC, err := auth.IndexAPIKey(plaintext, []byte("01234567890123456789012345678901"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return model.PersonalAccessToken{ID: uuid.NewString(), UserID: user.ID, Name: name, Preset: model.TokenPresetSubscriptionRead, SecretPlaintext: plaintext, SecretHMAC: secretHMAC}
+	}
+	revoked, expired := newToken("revoked"), newToken("expired")
+	revoked.RevokedAt, expired.ExpiresAt = &now, &now
+	for name, token := range map[string]model.PersonalAccessToken{
+		"revoked": revoked,
+		"expired": expired,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := db.Create(&token).Error; err != nil {
@@ -117,73 +140,9 @@ func TestPostgresIdentityRepositorySemantics(t *testing.T) {
 	}
 }
 
-func TestPostgresBasicAuthenticatorPasswordAndAPIKey(t *testing.T) {
-	db := openIdentityPostgres(t)
-	user := testUser(t, "alice", "correct password")
-	if err := db.Create(&user).Error; err != nil {
-		t.Fatalf("create user: %v", err)
-	}
-	pepper := []byte("0123456789abcdef0123456789abcdef")
-	repository, err := NewRepository(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	authenticator, err := NewBasicAuthenticator(repository, validEnvironment("ignored", pepper))
-	if err != nil {
-		t.Fatalf("NewBasicAuthenticator: %v", err)
-	}
-	fixedNow := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
-	authenticator.now = func() time.Time { return fixedNow }
-
-	principal, err := authenticator.AuthenticateBasic(context.Background(), "ALICE", "correct password")
-	if err != nil || principal.CredentialKind() != auth.CredentialAccountPassword || !principal.Allows(auth.ActionRepositoryWrite) {
-		t.Fatalf("password principal = %#v, %v", principal, err)
-	}
-	for _, password := range []string{"wrong", "mpsk_bad"} {
-		if _, err := authenticator.AuthenticateBasic(context.Background(), "alice", password); !errors.Is(err, ErrInvalidCredentials) {
-			t.Fatalf("invalid credential %q error = %v", password, err)
-		}
-	}
-
-	key, err := auth.GenerateAPIKey()
-	if err != nil {
-		t.Fatalf("GenerateAPIKey: %v", err)
-	}
-	index, err := auth.IndexAPIKey(key, pepper)
-	if err != nil {
-		t.Fatalf("IndexAPIKey: %v", err)
-	}
-	token := PersonalAccessToken{ID: uuid.NewString(), UserID: user.ID, Name: "test", SecretHMAC: index}
-	if err := db.Create(&token).Error; err != nil {
-		t.Fatalf("create token: %v", err)
-	}
-	if err := db.Create(&PersonalAccessTokenScope{TokenID: token.ID, Action: auth.ActionRepositoryRead}).Error; err != nil {
-		t.Fatalf("create scope: %v", err)
-	}
-	principal, err = authenticator.AuthenticateBasic(context.Background(), "alice", key)
-	if err != nil || principal.CredentialKind() != auth.CredentialAPIKey || !principal.Allows(auth.ActionRepositoryRead) || principal.Allows(auth.ActionRepositoryWrite) {
-		t.Fatalf("API key principal = %#v, %v", principal, err)
-	}
-	var authenticatedToken PersonalAccessToken
-	if err := db.Where("id = ?", token.ID).Take(&authenticatedToken).Error; err != nil {
-		t.Fatal(err)
-	}
-	if authenticatedToken.LastUsedAt != nil {
-		t.Fatalf("API key authentication updated last_used_at = %v", authenticatedToken.LastUsedAt)
-	}
-
-	revokedAt := fixedNow.Add(-time.Minute)
-	if err := db.Model(&token).Update("revoked_at", revokedAt).Error; err != nil {
-		t.Fatal(err)
-	}
-	if _, err := authenticator.AuthenticateBasic(context.Background(), "alice", key); !errors.Is(err, ErrInvalidCredentials) {
-		t.Fatalf("revoked token error = %v", err)
-	}
-}
-
 func TestPostgresRejectsMismatchedFixedSystemGroupDefinition(t *testing.T) {
 	db := openIdentityPostgres(t)
-	if err := db.Exec("INSERT INTO system_groups (id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)", AdminSystemGroupID, AdminSystemGroupName, "tampered", time.Now().UTC(), time.Now().UTC()).Error; err == nil {
+	if err := db.Exec("INSERT INTO system_groups (id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)", model.AdminSystemGroupID, model.AdminSystemGroupName, "tampered", time.Now().UTC(), time.Now().UTC()).Error; err == nil {
 		t.Fatal("database accepted mismatched fixed group definition")
 	}
 }
@@ -205,12 +164,12 @@ func TestPostgresBootstrapFreshRepeatRollbackAndConcurrency(t *testing.T) {
 		if err := bootstrapper.Bootstrap(context.Background()); err != nil {
 			t.Fatalf("first Bootstrap: %v", err)
 		}
-		var user User
+		var user model.User
 		if err := db.Take(&user).Error; err != nil {
 			t.Fatal(err)
 		}
 		originalHash := user.PasswordHash
-		delete(env, BootstrapAdminPasswordEnvironment)
+		delete(env, model.BootstrapAdminPasswordEnvironment)
 		var hashCalls atomic.Int32
 		bootstrapper.hash = func(string, auth.Argon2idParams) (string, error) {
 			hashCalls.Add(1)
@@ -230,7 +189,7 @@ func TestPostgresBootstrapFreshRepeatRollbackAndConcurrency(t *testing.T) {
 
 	t.Run("partial groups complete", func(t *testing.T) {
 		db := openIdentityPostgres(t)
-		if err := db.Create(&SystemGroup{ID: AdminSystemGroupID, Name: AdminSystemGroupName, Description: "Global system administrators"}).Error; err != nil {
+		if err := db.Create(&model.SystemGroup{ID: model.AdminSystemGroupID, Name: model.AdminSystemGroupName, Description: "Global system administrators"}).Error; err != nil {
 			t.Fatal(err)
 		}
 		bootstrapper := newFastBootstrapper(t, db, validEnvironment("password", []byte("0123456789abcdef0123456789abcdef")))
@@ -318,20 +277,24 @@ func identityPostgresDSNWithSearchPath(t *testing.T, dsn, schema string) string 
 	return fmt.Sprintf("%s search_path=%s", dsn, schema)
 }
 
-func testUser(t *testing.T, username, password string) User {
+func testUser(t *testing.T, username, password string) model.User {
 	t.Helper()
 	hash, err := auth.HashPassword(password, fastPasswordParams)
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
 	}
-	return User{ID: uuid.NewString(), Username: normalizeUsername(username), DisplayName: username, Status: UserStatusActive, PasswordHash: hash}
+	return model.User{ID: uuid.NewString(), Username: model.NormalizeUsername(username), DisplayName: username, Status: model.UserStatusActive, PasswordHash: hash}
 }
 
-func validEnvironment(password string, pepper []byte) MapEnvironment {
-	return MapEnvironment{BootstrapAdminPasswordEnvironment: password, APIKeyPepperEnvironment: EncodeAPIKeyPepper(pepper)}
+func validEnvironment(password string, pepper []byte) model.MapEnvironment {
+	return model.MapEnvironment{
+		model.BootstrapAdminPasswordEnvironment: password,
+		model.APIKeyPepperEnvironment:           model.EncodeAPIKeyPepper(pepper),
+		model.JWTSecretEnvironment:              "test-jwt-secret",
+	}
 }
 
-func newFastBootstrapper(t *testing.T, db *gorm.DB, env Environment) *Bootstrapper {
+func newFastBootstrapper(t *testing.T, db *gorm.DB, env model.Environment) *Bootstrapper {
 	t.Helper()
 	bootstrapper, err := NewBootstrapper(db, env)
 	if err != nil {
@@ -347,8 +310,8 @@ func assertBootstrapCounts(t *testing.T, db *gorm.DB, users, namespaces, groups,
 		model any
 		want  int64
 	}{
-		"users": {&User{}, users}, "namespaces": {&Namespace{}, namespaces},
-		"groups": {&SystemGroup{}, groups}, "memberships": {&UserGroupMembership{}, memberships},
+		"users": {&model.User{}, users}, "namespaces": {&model.Namespace{}, namespaces},
+		"groups": {&model.SystemGroup{}, groups}, "memberships": {&model.UserGroupMembership{}, memberships},
 	} {
 		var got int64
 		if err := db.Model(expectation.model).Count(&got).Error; err != nil {

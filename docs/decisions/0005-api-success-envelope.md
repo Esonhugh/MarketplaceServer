@@ -7,7 +7,7 @@
 
 ## Context
 
-Current management routes 混用 direct health、direct cursor list 和 enveloped create response。Target API 需要统一 success extraction，同时保留简单、稳定的 direct error。
+历史 management routes 曾混用 direct health、direct cursor list 和 enveloped create response。Identity compatibility slice 已将当前 health/PAT API 统一为本 ADR 的 success envelope，同时保留简单、稳定的 direct error。
 
 ## Decision
 
@@ -40,14 +40,14 @@ List 使用：
 - error 保持 direct `{code,message,requestId,details?}`；
 - `message` 不作为 client enum。
 
-Current health 和 token list 仍由 deployed OpenAPI 按实际 direct/cursor shape 描述，直到独立 compatibility implementation slice 完成。
+当前 health 与 token list 已完成 compatibility implementation，并由 deployed OpenAPI 描述为 enveloped health 与 page/size/total list。
 
 ## Consequences
 
 - Frontend 对 target success 使用统一 `data` extraction。
 - List metadata 位置固定，不引入 opaque cursor contract。
 - Exact total 会增加 count query 成本，repository 必须 tenant-scoped 且 indexed。
-- 已部署 direct/cursor clients 在迁移前继续按 deployed contract 工作。
+- Identity direct/cursor compatibility 已结束；客户端以当前 deployed OpenAPI 的 envelope 与 page/size/total contract 为准。
 
 ## Rejected alternatives
 

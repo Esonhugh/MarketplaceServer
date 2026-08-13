@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -79,6 +80,28 @@ func TestDisabledDoesNotInstallSPAFallback(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "MarketplaceServer") {
 		t.Fatal("disabled frontend returned SPA index body")
+	}
+}
+
+func TestEmbeddedIndexReferencesExistingAssets(t *testing.T) {
+	index, err := fs.ReadFile(embeddedDist, "dist/index.html")
+	if err != nil {
+		t.Fatalf("read embedded index: %v", err)
+	}
+
+	assetReference := regexp.MustCompile(`(?:src|href)=["']/?([^"']+)["']`)
+	matches := assetReference.FindAllSubmatch(index, -1)
+	if len(matches) == 0 {
+		t.Fatal("embedded index contains no asset references")
+	}
+	for _, match := range matches {
+		name := strings.TrimPrefix(string(match[1]), "./")
+		if strings.HasPrefix(name, "http://") || strings.HasPrefix(name, "https://") || strings.HasPrefix(name, "//") {
+			continue
+		}
+		if _, err := fs.Stat(embeddedDist, "dist/"+name); err != nil {
+			t.Errorf("embedded index asset %q does not exist: %v", name, err)
+		}
 	}
 }
 

@@ -108,7 +108,7 @@ func (stub userMarketplaceAuthorizerStub) Authorize(_ context.Context, _ auth.Pr
 
 func testMarketplacePrincipal(t *testing.T, id, username string, scopes auth.ScopeSet) auth.Principal {
 	t.Helper()
-	principal, err := auth.NewUserPrincipal(id, username, auth.CredentialAPIKey, scopes)
+	principal, err := auth.NewUserPrincipal(id, username, auth.CredentialPAT, scopes)
 	if err != nil {
 		t.Fatal(err)
 	}

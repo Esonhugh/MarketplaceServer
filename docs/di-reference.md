@@ -31,6 +31,8 @@ hub.Invoke(func(db *gorm.DB) { ... })
 | `gitservice.ProjectionBuilder` | `mod/git` 在 `Init()` Map 发布侧 builder | PostInit 起 | `mod/backend` publication service；请求侧 handler 不得加载此 contract |
 | `gitservice.RepositoryResolver` (`github.com/Esonhugh/MarketplaceServer/pkg/gitservice`) | `mod/backend` 在 `PostInit()` Map；通过 namespace relation 查询当前 repository metadata | Load 起 | `mod/git` 在 `Load()` 获取，先把 URL namespace/repository slug 解析为不含 GORM model 的 `Repository{ID, NamespaceID, OwnerUserID, Visibility, Status}`，再调用 Git service |
 | `distributionservice.Resolver` (`github.com/Esonhugh/MarketplaceServer/pkg/distributionservice`) | `mod/backend` 在 `PostInit()` Map | Load 起 | `mod/git` Public distribution routes；`ResolveMarketplace` 按持久化且不可变的 `{normalized-marketplace-name}-{8-lowercase-hex}` public key 解析，`ResolvePlugin` 按 distribution UUID 解析；每个请求只解析一次当前不可变 projection grant |
+| `auth.GitPATAuthenticator` (`github.com/Esonhugh/MarketplaceServer/pkg/auth`) | `mod/backend` identity service 在 `PostInit()` Map | Load 起 | `mod/git` Smart HTTP；只认证符合 operation preset 的 username+PAT，不接受账号 password 或 management JWT |
+| `auth.Authorizer` (`github.com/Esonhugh/MarketplaceServer/pkg/auth`) | `mod/backend` authorization policy 在 `PostInit()` Map | Load 起 | `mod/git` 对已解析 Plugin/repository resource 执行最终 read/write 授权 |
 
 > **Load 示例：** `mod/sql` Map 的是 `&db`（其中 `db` 类型为 `*gorm.DB`），消费者写 `var db *gorm.DB; err := hub.Load(&db)`。
 
@@ -38,8 +40,8 @@ hub.Invoke(func(db *gorm.DB) { ... })
 
 - `jin`：消费 `cmux.CMux`；提供 `*jin.Engine`。
 - `sql`：提供 `*gorm.DB`。
-- `git`：在 `Init()` 提供 `gitservice.RepositoryService`；在 `Load()` 消费 `*jin.Engine`、`gitservice.RepositoryResolver` 与 `distributionservice.Resolver`，注册 Git Smart HTTP 和 Public distribution routes。物理路径固定由 opaque ID/storage key 计算，不接受 URL slug。Marketplace public route 只接受 public key，不提供旧 UUID route；Plugin distribution route 仍接受 UUID。
-- `backend`：在 `PostInit()` 消费 `*jin.Engine`、`*gorm.DB`、`gitservice.RepositoryService`，并提供窄 `gitservice.RepositoryResolver` 与 `distributionservice.Resolver` contract；后者按 Marketplace public key 或 Plugin distribution UUID 定位 active immutable projection，同时保持 Marketplace internal ID、FK 和 pointer 为 UUID。除此 contract 外不向全局 DI 暴露内部领域对象。
+- `git`：在 `Init()` 提供 `gitservice.RepositoryService`；在 `Load()` 消费 `*jin.Engine`、`gitservice.RepositoryResolver`、`distributionservice.Resolver`、`auth.GitPATAuthenticator` 与 `auth.Authorizer`，注册 Git Smart HTTP 和 Public distribution routes。物理路径固定由 opaque ID/storage key 计算，不接受 URL slug。Marketplace public route 只接受 public key，不提供旧 UUID route；Plugin distribution route 仍接受 UUID。
+- `backend`：在 `PostInit()` 消费 `*jin.Engine`、`*gorm.DB`、`gitservice.RepositoryService`，并提供窄 `gitservice.RepositoryResolver`、`distributionservice.Resolver`、`auth.GitPATAuthenticator` 与 `auth.Authorizer` contract；projection resolver 按 Marketplace public key 或 Plugin distribution UUID 定位 active immutable projection，同时保持 Marketplace internal ID、FK 和 pointer 为 UUID。Identity 的 model/dao/service、management JWT authenticator 与 PAT management service 保持 backend 内部对象，不向全局 DI 暴露。
 - `frontend`：消费 `*jin.Engine`；只注册嵌入式静态资源和 `NoRoute` fallback，不提供共享 DI 类型。
 
 旧的 `jinx`、`myDB`、`pgsql`、`rds`、`grpcGateway`、`b2x`、`pyroscope`、`uptrace`、`jinPprof` 等模块不在 MarketplaceServer 当前运行时模块清单内；不要在新业务代码中依赖它们提供的 DI 类型。

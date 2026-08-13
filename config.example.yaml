@@ -31,6 +31,10 @@ sql:
 git:
   storageRoot: "./var/marketplace/git"
 
+backend:
+  # Keep empty. MARKETPLACE_JWT_SECRET takes precedence and must be set in production.
+  jwtSecret: ""
+
 frontend:
   disabled: false
   basePath: "/"

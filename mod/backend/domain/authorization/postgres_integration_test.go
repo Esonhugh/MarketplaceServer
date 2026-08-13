@@ -9,7 +9,8 @@ import (
 	"testing"
 
 	distributiondomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/distribution"
-	identitydomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity"
+	identitydao "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/dao"
+	identitymodel "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/model"
 	"github.com/Esonhugh/MarketplaceServer/pkg/auth"
 	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
@@ -21,23 +22,23 @@ const authorizationPostgresDSNEnvironment = "MARKETPLACE_TEST_POSTGRES_DSN"
 
 func TestPostgresGORMIdentityStateReader(t *testing.T) {
 	db := openAuthorizationPostgres(t)
-	user := identitydomain.User{ID: uuid.NewString(), Username: "alice", DisplayName: "Alice", Status: identitydomain.UserStatusActive, PasswordHash: "not-used"}
+	user := identitymodel.User{ID: uuid.NewString(), Username: "alice", DisplayName: "Alice", Status: identitymodel.UserStatusActive, PasswordHash: "not-used"}
 	ownerID := user.ID
-	namespace := identitydomain.Namespace{ID: uuid.NewString(), Kind: identitydomain.NamespaceKindUser, Slug: "alice", DisplayName: "Alice", OwnerUserID: &ownerID}
+	namespace := identitymodel.Namespace{ID: uuid.NewString(), Kind: identitymodel.NamespaceKindUser, Slug: "alice", DisplayName: "Alice", OwnerUserID: &ownerID}
 	if err := db.Create(&user).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&namespace).Error; err != nil {
 		t.Fatal(err)
 	}
-	groups := []identitydomain.SystemGroup{
-		{ID: identitydomain.AdminSystemGroupID, Name: identitydomain.AdminSystemGroupName, Description: "Global system administrators"},
-		{ID: identitydomain.DefaultSystemGroupID, Name: identitydomain.DefaultSystemGroupName, Description: "All active users"},
+	groups := []identitymodel.SystemGroup{
+		{ID: identitymodel.AdminSystemGroupID, Name: identitymodel.AdminSystemGroupName, Description: "Global system administrators"},
+		{ID: identitymodel.DefaultSystemGroupID, Name: identitymodel.DefaultSystemGroupName, Description: "All active users"},
 	}
 	if err := db.Create(&groups).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&identitydomain.UserGroupMembership{UserID: user.ID, GroupID: identitydomain.AdminSystemGroupID}).Error; err != nil {
+	if err := db.Create(&identitymodel.UserGroupMembership{UserID: user.ID, GroupID: identitymodel.AdminSystemGroupID}).Error; err != nil {
 		t.Fatal(err)
 	}
 	repository := distributiondomain.Repository{ID: uuid.NewString(), NamespaceID: namespace.ID, Slug: "repo", Visibility: "public", Status: distributiondomain.RepositoryStatusReady, StorageKey: uuid.NewString()}
@@ -45,7 +46,7 @@ func TestPostgresGORMIdentityStateReader(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	identities, err := identitydomain.NewRepository(db)
+	identities, err := identitydao.NewRepository(db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +66,22 @@ func TestPostgresGORMIdentityStateReader(t *testing.T) {
 		t.Fatalf("state = %+v", state)
 	}
 
-	token := identitydomain.PersonalAccessToken{ID: uuid.NewString(), UserID: user.ID, Name: "token", SecretHMAC: "index"}
+	plaintext, err := auth.GenerateAPIKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretHMAC, err := auth.IndexAPIKey(plaintext, []byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := identitymodel.PersonalAccessToken{
+		ID:              uuid.NewString(),
+		UserID:          user.ID,
+		Name:            "token",
+		Preset:          identitymodel.TokenPresetSubscriptionRead,
+		SecretPlaintext: plaintext,
+		SecretHMAC:      secretHMAC,
+	}
 	if err := db.Create(&token).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +97,7 @@ func TestPostgresGORMIdentityStateReader(t *testing.T) {
 
 func TestPostgresGORMIdentityStateReaderAnonymousResourceVisibility(t *testing.T) {
 	db := openAuthorizationPostgres(t)
-	namespace := identitydomain.Namespace{ID: uuid.NewString(), Kind: identitydomain.NamespaceKindTeam, Slug: "public", DisplayName: "Public"}
+	namespace := identitymodel.Namespace{ID: uuid.NewString(), Kind: identitymodel.NamespaceKindTeam, Slug: "public", DisplayName: "Public"}
 	if err := db.Create(&namespace).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +109,7 @@ func TestPostgresGORMIdentityStateReaderAnonymousResourceVisibility(t *testing.T
 	if err := db.Create(&marketplace).Error; err != nil {
 		t.Fatal(err)
 	}
-	identities, err := identitydomain.NewRepository(db)
+	identities, err := identitydao.NewRepository(db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +156,7 @@ func openAuthorizationPostgres(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open PostgreSQL integration schema: %v", err)
 	}
-	if err := identitydomain.Migrate(db); err != nil {
+	if err := identitydao.Migrate(db); err != nil {
 		t.Fatalf("migrate identity models: %v", err)
 	}
 	if err := distributiondomain.Migrate(db); err != nil {

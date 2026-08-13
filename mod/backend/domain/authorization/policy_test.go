@@ -223,21 +223,21 @@ func TestPolicyAuthorizeScopeIntersection(t *testing.T) {
 	}{
 		{
 			name:       "API key intersects personal owner permissions",
-			principal:  apiKeyPrincipal(t, "user-1", auth.ActionRepositoryRead),
+			principal:  patPrincipal(t, "user-1", auth.ActionRepositoryRead),
 			state:      IdentityState{Active: true, OwnsPersonalNamespace: true},
 			resource:   auth.ResourceRef{Type: "repository", ID: "repo-1", NamespaceID: "ns-user-1"},
 			wantAction: auth.ActionRepositoryRead,
 		},
 		{
 			name:       "API key intersects system admin permissions",
-			principal:  apiKeyPrincipal(t, "admin-1", auth.ActionPluginRead),
+			principal:  patPrincipal(t, "admin-1", auth.ActionPluginRead),
 			state:      IdentityState{Active: true, SystemAdmin: true},
 			resource:   auth.ResourceRef{Type: "plugin", ID: "plugin-2", NamespaceID: "ns-other"},
 			wantAction: auth.ActionPluginRead,
 		},
 		{
 			name:      "API key with empty scopes denies system admin",
-			principal: apiKeyPrincipal(t, "admin-1"),
+			principal: patPrincipal(t, "admin-1"),
 			state:     IdentityState{Active: true, SystemAdmin: true},
 			resource:  auth.ResourceRef{Type: "repository", ID: "repo-2", NamespaceID: "ns-other"},
 		},
@@ -314,9 +314,9 @@ func passwordPrincipal(t *testing.T, userID string) auth.Principal {
 	return principal
 }
 
-func apiKeyPrincipal(t *testing.T, userID string, scopes ...auth.Action) auth.Principal {
+func patPrincipal(t *testing.T, userID string, scopes ...auth.Action) auth.Principal {
 	t.Helper()
-	principal, err := auth.NewUserPrincipal(userID, userID, auth.CredentialAPIKey, auth.RestrictedScopes(scopes...))
+	principal, err := auth.NewUserPrincipal(userID, userID, auth.CredentialPAT, auth.RestrictedScopes(scopes...))
 	if err != nil {
 		t.Fatalf("NewUserPrincipal(): %v", err)
 	}

@@ -7,7 +7,7 @@
 - **Approval record:** 用户通过逐项 AskUser 评审直接批准
 - **Related roadmap:** [Authentication hardening](../../../roadmap.md#authentication-hardening)
 
-> `approved` 只表示目标语义获批，不代表 route、migration、frontend 或 runtime 已实现，也不自动授权 implementation。
+> 本设计已由当前 identity slice 实现；精确 deployed wire、当前 capability 与运行验证分别以 deployed OpenAPI、`current-state.md` 和实际 test report 为准。
 
 ## 1. 用户结果、scope 与当前基线
 
@@ -37,9 +37,9 @@ POST   /api/v1/me/tokens/{tokenId}/reveal
 - 不设计 team/service-account credential、private Marketplace credential 或 subscription 数据模型。
 - 不允许 PAT 访问 `/api/v1`。
 
-### 当前基线
+### 当前实现
 
-当前代码已有用户、Basic password/PAT authenticator、PAT create/cursor-list/revoke 和 authorization foundation，但没有 login/JWT/reveal；当前 management 和 Git 的通用 Basic authenticator仍可能接受账号密码。当前事实见 [`current-state.md`](../../../current-state.md)，不得把本设计写成已部署能力。
+当前 runtime 已实现用户与 bootstrap、password login、固定 30 天 HS256 JWT、management Bearer-only、PAT create/page-list/reveal/revoke、preset 与 plane-specific Git/subscription authenticator。Identity 在 `model`、`dao`、`service` package 内分离持久化 record、GORM/migration 与业务认证；management handler 不序列化 GORM record。当前事实与精确 route 见 [`current-state.md`](../../../current-state.md) 和 deployed OpenAPI。
 
 ## 2. Authentication 与 credential lifecycle
 
@@ -53,7 +53,7 @@ POST   /api/v1/me/tokens/{tokenId}/reveal
 - 资源 endpoint 仍按目标资源查询当前 policy/membership。JWT username 找不到授权事实时按该资源 policy 默认拒绝，不降级为 anonymous。
 - Principal credential type 明确为 `CredentialJWT`。
 
-JWT key 配置保持简单：YAML `jwtSecret`，环境变量 `MARKETPLACE_JWT_SECRET` 优先；任意非空 raw string 可用。缺失/空值使认证初始化失败。示例配置可提供明显标记为 development-only 的值。
+JWT key 配置保持简单：YAML `backend.jwtSecret`，环境变量 `MARKETPLACE_JWT_SECRET` 优先；任意非空 raw string 可用。缺失/空值使认证初始化失败；环境变量显式存在但为空时不回退 YAML。示例配置只列空值并要求生产使用受保护环境/secret manager。
 
 ### PAT preset
 
@@ -136,7 +136,8 @@ active --DELETE/revoke------> revoked
 ## 7. Approval 与 implementation record
 
 - **Design approval:** 2026-08-12 AskUser 逐项确认，用户选择直接 `approved`
-- **Implementation approval:** none
-- **Evidence:** design only
-- **Remaining proposed scope:** production schema、routes、JWT、plane split、frontend 和 compatibility cutover
-- **Status:** 只有代码、tests、migration、routes 和适用运行证据齐备后才能改为 `implemented`
+- **Implementation status:** `implemented`
+- **Evidence:** `domain/identity/{model,dao,service}`、`handler/identity`、backend route wiring、identity allow/deny tests 与 deployed OpenAPI conformance tests
+- **Compatibility boundary:** legacy scope/HMAC-only PAT schema 启动拒绝；不自动 backfill、drop 或双读
+- **Remaining hardening:** audit events、operator secret rotation、non-development legacy migration plan；broader Plugin/Marketplace/team management API 仍不属于本 slice
+- **Verification boundary:** PostgreSQL/MySQL/race/frontend 是否通过必须引用实际执行报告，不由 `implemented` 状态推定

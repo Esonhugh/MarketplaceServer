@@ -1,4 +1,4 @@
-package identity
+package model
 
 import (
 	"encoding/base64"

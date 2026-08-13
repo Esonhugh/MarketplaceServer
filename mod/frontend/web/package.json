@@ -6,16 +6,21 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "check": "svelte-check --fail-on-warnings",
-    "test": "npm run check && npm run build",
+    "test": "vitest run",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "latest",
     "@tailwindcss/vite": "latest",
-    "svelte-check": "latest",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/svelte": "^5.4.2",
+    "@testing-library/user-event": "^14.6.4",
+    "jsdom": "^29.1.1",
     "svelte": "latest",
+    "svelte-check": "latest",
     "tailwindcss": "latest",
-    "vite": "latest"
+    "vite": "latest",
+    "vitest": "^4.1.10"
   }
 }

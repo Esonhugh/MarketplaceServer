@@ -4,7 +4,7 @@
 - **Last reviewed:** 2026-08-11
 - **Approval record:** 用户在交互评审中确认 OpenAPI 只作 API 文档、deployed/proposed 分离、page/size pagination、handwritten client 与 JWT frontend auth
 - **Scope:** `/api/v1` 当前与目标 wire conventions
-- **Implementation conformance:** 当前 handler 仅部分符合目标；差异不会因本文档而自动改变
+- **Implementation conformance:** identity login/health/PAT slice 已符合 deployed contract；broader Plugin/Marketplace/team target 仍未实现
 
 ## 1. 两份 OpenAPI 文档
 
@@ -80,7 +80,7 @@ OpenAPI request schema 不使用 `additionalProperties: false` 来宣称 runtime
 
 `POST /api/v1/auth/login` 接收 username/password，成功签发固定 30 天的 stateless HS256 JWT。JWT 只包含 canonical `username`、`iat` 和 `exp`，不包含 `sub`、`jti`、`authVersion`、role、namespace、scope 或 permission snapshot。JWT 验签不查询用户表；资源 endpoint 仍按当前 resource policy 默认拒绝。已签发 JWT 不支持 server-side revoke，普通 logout 只清除浏览器状态，无 refresh token。
 
-JWT key 从 YAML `jwtSecret` 加载，`MARKETPLACE_JWT_SECRET` 优先覆盖；缺失或空值使认证初始化失败。Secret rotation 仍需单独设计。
+JWT key 从 YAML `backend.jwtSecret` 加载，`MARKETPLACE_JWT_SECRET` 优先覆盖；两者缺失/空值，或环境变量显式设置为空时，认证初始化失败。Secret rotation 仍需单独设计。
 
 ### Management
 
@@ -114,17 +114,10 @@ Svelte component 只通过一个 application-owned `apiClient` 调用 `/api/v1`�
 
 `localStorage` 只保存 username 和 JWT，不保存 password、PAT plaintext、distribution credential 或其他 secret。
 
-## 7. 当前兼容性差异
+## 7. 当前实现边界
 
-Deployed OpenAPI 必须继续描述当前行为，直到单独 implementation slice 修改 handler/tests：
+Identity slice 已部署并由 `management-v1.yaml` 描述：health/login 公开；PAT list/create/revoke/reveal 只接受 Bearer JWT；success 使用 `data` envelope，list 使用 page/size/exact total；create/reveal 返回 plaintext 且禁止缓存；error 使用框架 ULID header/body。旧 Basic/cursor/scope identity components 已无 deployed reference。
 
-| Current operation | Deployed behavior | Approved target |
-|---|---|---|
-| `GET /api/v1/health` | direct health payload | `{ "data": Health }` |
-| `GET /api/v1/me/tokens` | direct cursor page | enveloped page/size/total list |
-| `POST /api/v1/me/tokens` | enveloped create, Basic auth, arbitrary scopes, rejects unknown fields | Bearer JWT only；preset；unknown fields ignored |
-| PAT reveal | route 不存在 | `POST /api/v1/me/tokens/{tokenId}/reveal` |
-| token error | errors generate request ID | framework ULID header/body retained；success/204 not required |
-| frontend login | route 不存在 | `POST /api/v1/auth/login` |
+`management-v1-design.yaml` 中 Plugin、Plugin version、Marketplace、revision 与 distribution credential path 仍是 proposed，未进入 deployed OpenAPI，也不能由 identity 完成状态推导为已实现。
 
-Identity implementation 只保留获批目标模型，不增加 legacy schema/双读/backfill。当前开发数据在 implementation approval 明确后重建；不能只修改 deployed OpenAPI 后声称实现。
+Identity persistence 只保留获批目标模型，不增加 legacy 双读/backfill。Migration 发现旧 scope table 或缺少目标 PAT columns 时拒绝启动；开发环境由 operator 确认可丢弃后重建，非开发环境先备份并设计显式 migration/credential rotation。

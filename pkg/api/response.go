@@ -17,7 +17,7 @@ type ErrorResponse struct {
 	Code      string `json:"code"`
 	Message   string `json:"message"`
 	RequestID string `json:"requestId"`
-	Details   any    `json:"details,omitempty"`
+	Details   string `json:"details,omitempty"`
 }
 
 // NewError constructs an error response with the required stable fields.
@@ -29,8 +29,8 @@ func NewError(code, message, requestID string) ErrorResponse {
 	}
 }
 
-// NewErrorWithDetails constructs an error response with optional structured details.
-func NewErrorWithDetails(code, message, requestID string, details any) ErrorResponse {
+// NewErrorWithDetails constructs an error response with optional safe text details.
+func NewErrorWithDetails(code, message, requestID, details string) ErrorResponse {
 	resp := NewError(code, message, requestID)
 	resp.Details = details
 	return resp

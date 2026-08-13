@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	identitydomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity"
+	identitymodel "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/model"
 	"github.com/Esonhugh/MarketplaceServer/pkg/distributionservice"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -17,7 +17,7 @@ func (repository *GORMRepository) LoadPublicationInput(ctx context.Context, temp
 	if err := repository.db.WithContext(ctx).Where("id = ? AND status = ?", templateID.String(), StatusActive).Take(&template).Error; err != nil {
 		return PublicationInput{}, mapPublicationLookupError("load marketplace template", err)
 	}
-	var namespace identitydomain.Namespace
+	var namespace identitymodel.Namespace
 	if err := repository.db.WithContext(ctx).Where("id = ?", template.NamespaceID).Take(&namespace).Error; err != nil {
 		return PublicationInput{}, mapPublicationLookupError("load marketplace namespace", err)
 	}

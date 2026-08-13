@@ -16,7 +16,7 @@ import (
 
 func TestUserMarketplaceJSONAuthenticationOriginAndHeaders(t *testing.T) {
 	principal := handlerMarketplacePrincipal(t, "user-1", "alice")
-	authenticator := &basicAuthenticatorStub{principal: principal}
+	authenticator := &subscriptionPATAuthenticatorStub{principal: principal}
 	engine := jin.New()
 	service := handlerMarketplaceService()
 	engine.GET("/distribution/users/:username/marketplace.json", NewUserMarketplaceJSONHandler(authenticator, service).Get)
@@ -59,9 +59,50 @@ func TestUserMarketplaceJSONAuthenticationOriginAndHeaders(t *testing.T) {
 	}
 }
 
+func TestUserMarketplaceJSONUsesSubscriptionPATAndRejectsPasswordOrJWT(t *testing.T) {
+	principal := handlerMarketplacePrincipal(t, "user-1", "alice")
+	authenticator := &subscriptionPATAuthenticatorStub{principal: principal}
+	engine := jin.New()
+	NewUserMarketplaceJSONHandler(authenticator, handlerMarketplaceService()).Register(engine)
+
+	for _, plaintext := range []string{"sub-read-pat", "git-clone-pat", "git-write-pat"} {
+		request := httptest.NewRequest(http.MethodGet, "/distribution/users/alice/marketplace.json", nil)
+		request.Host = "market.example"
+		request.SetBasicAuth("alice", plaintext)
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("PAT %q status = %d, want 200", plaintext, response.Code)
+		}
+	}
+	if authenticator.calls != 3 {
+		t.Fatalf("authenticator calls = %d, want 3", authenticator.calls)
+	}
+
+	for _, test := range []struct {
+		name          string
+		authorization string
+	}{
+		{name: "account password", authorization: "Basic YWxpY2U6YWNjb3VudC1wYXNzd29yZA=="},
+		{name: "JWT bearer", authorization: "Bearer jwt-token"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			authenticator.err = errors.New("invalid credentials")
+			request := httptest.NewRequest(http.MethodGet, "/distribution/users/alice/marketplace.json", nil)
+			request.Host = "market.example"
+			request.Header.Set("Authorization", test.authorization)
+			response := httptest.NewRecorder()
+			engine.ServeHTTP(response, request)
+			if response.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want 404", response.Code)
+			}
+		})
+	}
+}
+
 func TestUserMarketplaceJSONRejectsInvalidHost(t *testing.T) {
 	principal := handlerMarketplacePrincipal(t, "user-1", "alice")
-	authenticator := &basicAuthenticatorStub{principal: principal}
+	authenticator := &subscriptionPATAuthenticatorStub{principal: principal}
 	engine := jin.New()
 	NewUserMarketplaceJSONHandler(authenticator, handlerMarketplaceService()).Register(engine)
 
@@ -79,7 +120,7 @@ func TestUserMarketplaceJSONRejectsInvalidHost(t *testing.T) {
 
 func TestUserMarketplaceJSONReturnsGenericNotFoundAndRechecksBefore304(t *testing.T) {
 	principal := handlerMarketplacePrincipal(t, "user-1", "alice")
-	authenticator := &basicAuthenticatorStub{principal: principal}
+	authenticator := &subscriptionPATAuthenticatorStub{principal: principal}
 	authorizer := &countingAuthorizer{}
 	service := distributiondomain.NewUserMarketplaceService(&handlerRepository{}, authorizer)
 	engine := jin.New()
@@ -116,13 +157,13 @@ func handlerMarketplaceService() *distributiondomain.UserMarketplaceService {
 	return distributiondomain.NewUserMarketplaceService(&handlerRepository{}, &countingAuthorizer{})
 }
 
-type basicAuthenticatorStub struct {
+type subscriptionPATAuthenticatorStub struct {
 	principal auth.Principal
 	err       error
 	calls     int
 }
 
-func (stub *basicAuthenticatorStub) AuthenticateBasic(context.Context, string, string) (auth.Principal, error) {
+func (stub *subscriptionPATAuthenticatorStub) AuthenticateSubscriptionPAT(context.Context, string, string) (auth.Principal, error) {
 	stub.calls++
 	return stub.principal, stub.err
 }
@@ -142,7 +183,7 @@ func (stub *countingAuthorizer) Authorize(_ context.Context, _ auth.Principal, _
 
 func handlerMarketplacePrincipal(t *testing.T, id, username string) auth.Principal {
 	t.Helper()
-	principal, err := auth.NewUserPrincipal(id, username, auth.CredentialAccountPassword, auth.UnrestrictedScopes())
+	principal, err := auth.NewUserPrincipal(id, username, auth.CredentialPAT, auth.RestrictedScopes(auth.ActionMarketplaceRead, auth.ActionPluginRead, auth.ActionRepositoryRead))
 	if err != nil {
 		t.Fatal(err)
 	}

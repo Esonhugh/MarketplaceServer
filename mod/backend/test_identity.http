@@ -1,0 +1,85 @@
+@baseUrl = http://localhost:8080
+@username = admin
+@password = replace-with-bootstrap-password
+@jwt = replace-with-login-jwt
+@tokenId = 00000000-0000-0000-0000-000000000000
+@pat = mpsk_replace-with-personal-access-token
+@marketplaceKey = replace-with-marketplace-public-key
+
+### Health
+GET {{baseUrl}}/api/v1/health
+Accept: application/json
+
+### Login
+POST {{baseUrl}}/api/v1/auth/login
+Accept: application/json
+Content-Type: application/json
+
+{
+  "username": "{{username}}",
+  "password": "{{password}}"
+}
+
+### List personal access tokens
+GET {{baseUrl}}/api/v1/me/tokens?page=1&size=20
+Accept: application/json
+Authorization: Bearer {{jwt}}
+
+### Create subscription token
+POST {{baseUrl}}/api/v1/me/tokens
+Accept: application/json
+Authorization: Bearer {{jwt}}
+Content-Type: application/json
+
+{
+  "name": "http-client-subscription",
+  "preset": "sub-read",
+  "expiresAt": null
+}
+
+### Create Git clone token
+POST {{baseUrl}}/api/v1/me/tokens
+Accept: application/json
+Authorization: Bearer {{jwt}}
+Content-Type: application/json
+
+{
+  "name": "http-client-git-clone",
+  "preset": "git-clone",
+  "expiresAt": null
+}
+
+### Create Git write token
+POST {{baseUrl}}/api/v1/me/tokens
+Accept: application/json
+Authorization: Bearer {{jwt}}
+Content-Type: application/json
+
+{
+  "name": "http-client-git-write",
+  "preset": "git-write",
+  "expiresAt": null
+}
+
+### Reveal personal access token
+POST {{baseUrl}}/api/v1/me/tokens/{{tokenId}}/reveal
+Accept: application/json
+Authorization: Bearer {{jwt}}
+Content-Type: application/json
+
+{
+  "password": "{{password}}"
+}
+
+### Revoke personal access token
+DELETE {{baseUrl}}/api/v1/me/tokens/{{tokenId}}
+Authorization: Bearer {{jwt}}
+
+### Read authenticated user Marketplace
+GET {{baseUrl}}/distribution/users/{{username}}/marketplace.json
+Accept: application/json
+Authorization: Basic {{username}} {{pat}}
+
+### Read public Marketplace JSON
+GET {{baseUrl}}/distribution/marketplaces/{{marketplaceKey}}/marketplace.json
+Accept: application/json

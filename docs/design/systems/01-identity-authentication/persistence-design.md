@@ -6,7 +6,7 @@
 - **Last reviewed:** 2026-08-12
 - **Approval record:** 用户通过逐项 AskUser 评审直接批准
 
-> 本文是目标 schema 设计，不证明当前 GORM model 或数据库已经符合。
+> 本 schema 已由 `domain/identity/model`、`dao` 和 `service` 实现；具体数据库是否通过 PostgreSQL/MySQL 集成验证必须引用实际 test report，不能仅由设计状态推定。
 
 ## 1. Schema 增量
 
@@ -28,11 +28,11 @@
 | `created_at` | `time.Time` | non-null | owner pagination index | creation fact |
 | `updated_at` | `time.Time` | non-null | none | mutable metadata fact |
 
-`personal_access_token_scopes` 不属于目标模型并删除；preset 名是唯一持久化 capability 表达。删除现有 table/data 属于实现阶段的开发数据重建操作，必须在 implementation approval 中明确执行，本文不授权 destructive command。
+`personal_access_token_scopes` 不属于当前模型；preset 名是唯一持久化 capability 表达。Startup guard 发现旧 scope table，或已有 PAT table 缺少 `preset`、`secret_plaintext`、`secret_hmac` 时返回 `identity: legacy credential schema requires operator rebuild`，不会自动删除、backfill 或双读。开发环境只有在 operator 确认数据可丢弃后才能停止服务并重建整个开发数据库；非开发环境必须先备份并交付显式 PAT migration/rotation 方案。
 
 ## 2. Secret boundary
 
-经 [ADR-0006](../../../decisions/0006-repeatable-credential-plaintext-storage.md) 批准，`secret_plaintext` 是有限的 persistence 例外：数据库和 backup operator 被视为能够取得 credential。账号 password 仍只保存 Argon2id hash；JWT signing secret 不入库。
+经 [ADR-0006](../../../decisions/0006-repeatable-credential-plaintext-storage.md) 批准，`secret_plaintext` 是有限的 persistence 例外：主库、replica、dump、snapshot、PITR archive、backup/restore operator 都进入 credential trust boundary，必须按可直接使用的 secret material 控制访问、传输、恢复与销毁。账号 password 仍只保存 Argon2id hash；JWT signing secret 不入库。
 
 GORM record 与 management DTO 必须隔离：
 
@@ -84,15 +84,6 @@ Revoked 优先于 expired。Revoke 只设置 `revoked_at`，不删除记录或 s
 
 Schema authority 仍是 identity GORM records、ordered model list 和 `mod/backend/migrate.go` 的 `AutoMigrate` coordinator。
 
-实现前先写失败测试覆盖：
+当前测试覆盖 model/ordered migration list、legacy guard、三个 preset allow/unknown deny、duplicate HMAC/owner predicate、page/total/order、revoke/expiry status，以及 metadata projection 不读取或泄露 `secret_plaintext`。PostgreSQL 条件 suite 需要 `MARKETPLACE_TEST_POSTGRES_DSN`；MySQL 未实际运行时不得声称已验证。
 
-- clean DB 创建目标 columns、check、unique/FK/index；
-- repeated migration 幂等；
-- 三个 preset allow 和未知值 deny；
-- duplicate HMAC deny；
-- owner-scoped page/total/order 和跨 owner deny；
-- revoke/expiry status；
-- metadata projection不读取或泄露 `secret_plaintext`；
-- PostgreSQL 条件 suite；MySQL 未实际运行时不得声称已验证。
-
-本设计不提供旧 PAT 数据迁移。实现 slice 必须明确开发数据库重建前提，并在任何非开发环境存在数据时停止而不是静默删除。
+本实现不提供旧 PAT 数据迁移。开发数据库重建流程见 [Operations](../../../operations.md)；任何非开发环境存在数据时必须停止并设计显式迁移/credential rotation，而不是静默删除。

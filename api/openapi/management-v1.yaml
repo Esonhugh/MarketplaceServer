@@ -9,251 +9,219 @@ info:
     Authoritative wire contract for currently implemented management operations
     under `/api/v1`.
 
-    This document models deployed behavior only. `GET /api/v1/health` and
-    `GET /api/v1/me/tokens` currently return direct success payloads; the token
-    list currently uses cursor pagination. Target contracts are documented in
-    `management-v1-design.yaml` and are not implemented by this schema.
-    Errors remain direct objects.
+    This document contains only deployed login, health, and current-user personal
+    access token operations. Future Plugin, Marketplace, team, and distribution
+    credential management paths remain in `management-v1-design.yaml` and are not
+    evidence of runtime availability.
 
     Git Smart HTTP, distribution endpoints, frontend routes, and the external
     Claude Code `marketplace.json` schema are outside this contract.
   x-document-status: approved
-  x-implementation-conformance: partial
+  x-implementation-conformance: implemented
 jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
 servers:
   - url: /
     description: Same-origin MarketplaceServer deployment
 
 tags:
+  - name: Authentication
+    description: Password login and management JWT issuance.
   - name: Health
     description: Management-plane process health.
   - name: Personal access tokens
     description: Personal access token lifecycle for the authenticated user.
 
 paths:
+  /api/v1/auth/login:
+    post:
+      operationId: login
+      tags: [Authentication]
+      summary: Sign in to the management plane
+      description: |
+        Verifies an account password and issues a stateless 30-day HS256 JWT.
+        Missing, unreadable, malformed, oversized, top-level null, or trailing JSON
+        produces 400; invalid credentials produce the same non-disclosing 401 response.
+        Unknown JSON properties are currently ignored.
+      security: []
+      requestBody:
+        required: true
+        description: |
+          The handler decodes JSON but does not currently enforce the Content-Type
+          header. Request bodies are limited to 65,536 bytes.
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: A fixed 30-day frontend JWT was issued.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/SecretCacheControl"
+            Pragma:
+              $ref: "#/components/headers/SecretPragma"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginSuccess"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/AuthenticationFailed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /api/v1/health:
     get:
       operationId: getManagementHealth
-      tags:
-        - Health
+      tags: [Health]
       summary: Get backend health
       description: |
-        Returns the currently implemented unauthenticated backend health response.
-        The handler currently reports a static `ok` backend check; it is not a
+        Returns the current static backend process check. This endpoint is not a
         database or Git readiness probe.
-
-        This deployed response is the direct `Health` object. The proposed
-        contract uses `{ "data": <Health> }`; changing the handler requires a
-        separately approved compatibility slice.
       security: []
       responses:
         "200":
-          description: Current direct health response.
-          x-compatibility-debt: Direct success payload; proposed target wraps Health in data.
+          description: Current management-plane process health.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ImplementedManagementHealth"
-              examples:
-                implementedBackendHealth:
-                  summary: Exact response asserted by the backend route test
-                  value:
-                    status: ok
-                    checks:
-                      - name: backend
-                        status: ok
+                $ref: "#/components/schemas/HealthSuccess"
 
   /api/v1/me/tokens:
-    parameters:
-      - $ref: "#/components/parameters/RequestId"
     get:
       operationId: listPersonalAccessTokens
-      tags:
-        - Personal access tokens
+      tags: [Personal access tokens]
       summary: List the current user's personal access tokens
       description: |
-        Returns an owner-scoped, newest-first page of token metadata. Cursors are
-        opaque, integrity-protected, bound to the current user, and must never be
-        decoded by clients.
-
-        The deployed handler returns `ListTokensData` directly with cursor
-        pagination. The proposed contract uses the common data envelope and
-        page/size/total pagination; changing the handler requires a separately
-        approved compatibility slice.
+        Returns an exact owner-scoped page ordered by creation time and ID,
+        newest first. Metadata includes active, expired, and revoked tokens but
+        never includes plaintext or HMAC secret material.
       security:
-        - BasicAuth: []
+        - BearerJWT: []
       parameters:
-        - $ref: "#/components/parameters/TokenListLimit"
-        - $ref: "#/components/parameters/TokenListCursor"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
       responses:
         "200":
-          description: Current direct cursor page of token metadata.
-          x-compatibility-debt: Direct cursor payload; proposed target uses an enveloped page/size/total list.
+          description: Exact owner-scoped token page.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ListTokensData"
-              examples:
-                pageWithCursor:
-                  summary: Metadata-only page with an opaque next cursor
-                  value:
-                    items:
-                      - id: 4b11513f-e003-4fd1-8e73-c573bee65e20
-                        name: CI
-                        scopes:
-                          - repository.read
-                        createdAt: "2026-08-10T00:00:00Z"
-                    nextCursor: opaque
-                emptyPage:
-                  summary: Empty pages retain an items array and omit nextCursor
-                  value:
-                    items: []
+                $ref: "#/components/schemas/TokenPageSuccess"
         "401":
-          $ref: "#/components/responses/Unauthenticated"
+          $ref: "#/components/responses/BearerUnauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "422":
-          description: Invalid limit or cursor.
-          headers:
-            X-Request-Id:
-              $ref: "#/components/headers/RequestId"
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-              examples:
-                invalidLimit:
-                  value:
-                    code: validation_failed
-                    message: limit must be a positive integer
-                    requestId: 27efef25-b8ad-4edf-a341-f10f4b4fc7f4
-                invalidCursor:
-                  value:
-                    code: validation_failed
-                    message: request is invalid
-                    requestId: 27efef25-b8ad-4edf-a341-f10f4b4fc7f4
+          $ref: "#/components/responses/ValidationFailed"
         "500":
           $ref: "#/components/responses/InternalError"
 
     post:
       operationId: createPersonalAccessToken
-      tags:
-        - Personal access tokens
+      tags: [Personal access tokens]
       summary: Create a personal access token
       description: |
-        Creates a token for the authenticated user. Unknown JSON fields, malformed
-        JSON, bodies larger than 65,536 bytes, and a second trailing JSON value are
-        rejected. The plaintext token is returned only in this response and must
-        not be cached, logged, or persisted by a client.
+        Creates an owner-scoped PAT using one cumulative capability preset.
+        Unknown JSON properties are currently ignored. The repeatably revealable
+        plaintext is returned in this response and is protected from caching.
       security:
-        - BasicAuth: []
+        - BearerJWT: []
       requestBody:
         required: true
         description: |
-          The documented representation is JSON. The current handler decodes a valid
-          JSON body without enforcing the Content-Type header; strict media-type
-          enforcement is tracked as implementation conformance debt.
-        x-conformance-debt: Current handler does not enforce Content-Type application/json.
+          The handler decodes JSON but does not currently enforce the Content-Type
+          header. Request bodies are limited to 65,536 bytes.
         content:
           application/json:
             schema:
               $ref: "#/components/schemas/CreateTokenRequest"
-            examples:
-              repositoryReadToken:
-                value:
-                  name: CI
-                  scopes:
-                    - repository.read
-              expiringToken:
-                value:
-                  name: Temporary automation
-                  scopes:
-                    - repository.read
-                    - plugin.read
-                  expiresAt: "2026-12-31T00:00:00Z"
       responses:
         "201":
-          description: Token created; plaintext is disclosed once in this response.
+          description: Token created with owner-revealable plaintext.
           headers:
             Cache-Control:
-              description: Prevents storage of the one-time plaintext token.
-              required: true
-              schema:
-                type: string
-                const: private, no-store
-              example: private, no-store
+              $ref: "#/components/headers/SecretCacheControl"
             Pragma:
-              description: Compatibility cache prevention for the one-time plaintext token.
-              required: true
-              schema:
-                type: string
-                const: no-cache
-              example: no-cache
+              $ref: "#/components/headers/SecretPragma"
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CreateTokenResponse"
-              examples:
-                createdToken:
-                  value:
-                    data:
-                      id: 4b11513f-e003-4fd1-8e73-c573bee65e20
-                      name: CI
-                      scopes:
-                        - repository.read
-                      createdAt: "2026-08-10T00:00:00Z"
-                      token: mpsk_0123456789abcdefghijklmnopqrstuvwxyzABCDEFG
+                $ref: "#/components/schemas/CreatedTokenSuccess"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
-          $ref: "#/components/responses/Unauthenticated"
+          $ref: "#/components/responses/BearerUnauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "422":
-          description: The JSON body or requested token properties are invalid.
-          headers:
-            X-Request-Id:
-              $ref: "#/components/headers/RequestId"
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-              examples:
-                invalidBody:
-                  value:
-                    code: validation_failed
-                    message: request body is invalid
-                    requestId: 27efef25-b8ad-4edf-a341-f10f4b4fc7f4
-                invalidTokenProperties:
-                  value:
-                    code: validation_failed
-                    message: request is invalid
-                    requestId: 27efef25-b8ad-4edf-a341-f10f4b4fc7f4
+          $ref: "#/components/responses/ValidationFailed"
         "500":
           $ref: "#/components/responses/InternalError"
 
   /api/v1/me/tokens/{tokenId}:
     parameters:
-      - $ref: "#/components/parameters/RequestId"
       - $ref: "#/components/parameters/TokenId"
     delete:
       operationId: revokePersonalAccessToken
-      tags:
-        - Personal access tokens
-      summary: Revoke a personal access token
+      tags: [Personal access tokens]
+      summary: Revoke an owner-scoped personal access token
       description: |
-        Revokes an owner-scoped token. Revoking an already revoked token is
-        idempotent. Another user's token is indistinguishable from a missing token.
-
-        Production token IDs are canonical UUID strings. The current handler passes
-        path text to the service without canonical UUID validation; accepting and
-        then returning not found for noncanonical values is implementation
-        conformance debt.
+        Revocation is idempotent. A malformed, noncanonical, missing, or
+        other-owner token identifier is intentionally hidden behind the same 404.
       security:
-        - BasicAuth: []
+        - BearerJWT: []
       responses:
         "204":
-          description: Token revoked successfully; the response body is empty.
+          description: Token revoked idempotently; response body is empty.
         "401":
-          $ref: "#/components/responses/Unauthenticated"
+          $ref: "#/components/responses/BearerUnauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/TokenNotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/me/tokens/{tokenId}/reveal:
+    parameters:
+      - $ref: "#/components/parameters/TokenId"
+    post:
+      operationId: revealPersonalAccessToken
+      tags: [Personal access tokens]
+      summary: Reveal an owner-scoped personal access token
+      description: |
+        Requires both a management Bearer JWT and the current account password.
+        The owner may reveal active, expired, or revoked PAT plaintext. Unknown
+        JSON properties are currently ignored and the response is not cacheable.
+      security:
+        - BearerJWT: []
+      requestBody:
+        required: true
+        description: |
+          The handler decodes JSON but does not currently enforce the Content-Type
+          header. Request bodies are limited to 65,536 bytes.
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RevealTokenRequest"
+      responses:
+        "200":
+          description: Token plaintext and current metadata were returned to its owner.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/SecretCacheControl"
+            Pragma:
+              $ref: "#/components/headers/SecretPragma"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RevealedTokenSuccess"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/RevealUnauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
@@ -263,111 +231,124 @@ paths:
 
 components:
   securitySchemes:
-    BasicAuth:
+    BearerJWT:
       type: http
-      scheme: basic
+      scheme: bearer
+      bearerFormat: JWT
       description: |
-        HTTP Basic authentication. For current PAT operations, the password slot
-        may contain an account password or a valid personal access token. A value
-        beginning with `mpsk_` is dispatched as a personal access token rather than
-        retried as an account password. PAT authentication also requires the supplied
-        username to normalize to the token owner's username. Wrong usernames and
-        invalid, expired, revoked, or disabled-owner PATs produce the same 401 response.
-        This scheme does not authorize distribution credentials on the management plane.
+        Stateless management JWT signed with HS256. Issued tokens contain exactly
+        canonical username, iat, and exp claims and have a fixed 30-day lifetime.
+        Account passwords and PATs are not accepted as management Bearer tokens.
 
   parameters:
-    RequestId:
-      name: X-Request-Id
-      in: header
-      required: false
-      description: |
-        Optional opaque correlation identifier. The token handler trims the value
-        and accepts it when nonempty and at most 128 bytes; otherwise it generates
-        a UUID. Token error responses echo the selected value in both the response
-        header and error body. Success responses do not currently guarantee an echo.
-      schema:
-        type: string
-        minLength: 1
-        x-runtime-maxBytes: 128
-        x-runtime-constraint: UTF-8 byte count after trimming; standard JSON Schema length keywords do not enforce this limit.
-      example: request-1
-    TokenListLimit:
-      name: limit
+    Page:
+      name: page
       in: query
       required: false
-      description: |
-        Requested page size. Defaults to 50. It must be a positive integer; the
-        current handler accepts values above 100 and clamps them to 100.
+      description: One-based page number; defaults to 1.
       schema:
         type: integer
         minimum: 1
-        default: 50
-      example: 50
-    TokenListCursor:
-      name: cursor
+        default: 1
+    Size:
+      name: size
       in: query
       required: false
-      description: |
-        Opaque, integrity-protected cursor from `nextCursor`. The current handler
-        limits the decoded query string to 1,024 bytes. Clients must not decode it.
+      description: Page size; defaults to 20 and must not exceed 100.
       schema:
-        type: string
-        x-runtime-maxBytes: 1024
-        x-runtime-constraint: UTF-8 byte count; standard JSON Schema length keywords do not enforce this limit.
-      example: opaque
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
     TokenId:
       name: tokenId
       in: path
       required: true
-      description: |
-        Canonical UUID string identifying the token. Production creation generates
-        this form. The current delete handler does not validate the format before
-        lookup; that implementation gap is tracked as conformance debt.
+      description: Canonical lowercase hyphenated UUID identifying the PAT.
       schema:
-        type: string
-        minLength: 1
-      x-production-format: canonical lowercase hyphenated UUID
-      x-conformance-debt: Current handler does not enforce the production UUID format at this boundary.
-      example: 4b11513f-e003-4fd1-8e73-c573bee65e20
+        $ref: "#/components/schemas/UUID"
 
   headers:
     RequestId:
-      description: Correlation identifier matching the error body's `requestId`.
-      required: true
+      description: Framework-generated ULID matching the error body's requestId.
       schema:
         type: string
-        minLength: 1
-        x-runtime-maxBytes: 128
-        x-runtime-constraint: UTF-8 byte count; standard JSON Schema length keywords do not enforce this limit.
-      example: 27efef25-b8ad-4edf-a341-f10f4b4fc7f4
-    WwwAuthenticate:
-      description: Basic authentication challenge for the management plane.
-      required: true
+        pattern: "^[0-9A-HJKMNP-TV-Z]{26}$"
+    BearerChallenge:
+      description: Management Bearer authentication challenge.
       schema:
         type: string
-        const: Basic realm="MarketplaceServer"
-      example: Basic realm="MarketplaceServer"
+        const: 'Bearer realm="MarketplaceServer Management"'
+    SecretCacheControl:
+      description: Prevents storage of a secret-bearing response.
+      schema:
+        type: string
+        const: private, no-store
+    SecretPragma:
+      description: Compatibility cache prevention for a secret-bearing response.
+      schema:
+        type: string
+        const: no-cache
 
   responses:
-    Unauthenticated:
-      description: Basic authentication is missing or invalid.
+    BadRequest:
+      description: The body is missing, unreadable, malformed, oversized, top-level null, or contains a trailing JSON value.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/RequestId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: bad_request
+            message: request body is invalid
+            requestId: 01J51X8R6M4B9D5VYN2Q3H7KCT
+    AuthenticationFailed:
+      description: Account credentials are invalid; no credential detail is disclosed.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/RequestId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: unauthenticated
+            message: authentication failed
+            requestId: 01J51X8R6M4B9D5VYN2Q3H7KCT
+    BearerUnauthenticated:
+      description: The management Bearer JWT is missing or invalid.
       headers:
         X-Request-Id:
           $ref: "#/components/headers/RequestId"
         WWW-Authenticate:
-          $ref: "#/components/headers/WwwAuthenticate"
+          $ref: "#/components/headers/BearerChallenge"
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
-          examples:
-            authenticationRequired:
-              value:
-                code: unauthenticated
-                message: authentication is required
-                requestId: 27efef25-b8ad-4edf-a341-f10f4b4fc7f4
+          example:
+            code: unauthenticated
+            message: authentication is required
+            requestId: 01J51X8R6M4B9D5VYN2Q3H7KCT
+    RevealUnauthenticated:
+      description: |
+        The management Bearer JWT is missing or invalid, or the password
+        confirmation failed. Bearer-authentication failures include
+        `WWW-Authenticate`; password-confirmation failures omit it. The response
+        header is therefore optional.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/RequestId"
+        WWW-Authenticate:
+          $ref: "#/components/headers/BearerChallenge"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
     Forbidden:
-      description: The authenticated principal is not allowed to perform the operation.
+      description: The authenticated principal is not authorized for this action and resource.
       headers:
         X-Request-Id:
           $ref: "#/components/headers/RequestId"
@@ -375,14 +356,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
-          examples:
-            permissionDenied:
-              value:
-                code: forbidden
-                message: permission denied
-                requestId: 27efef25-b8ad-4edf-a341-f10f4b4fc7f4
+          example:
+            code: forbidden
+            message: permission denied
+            requestId: 01J51X8R6M4B9D5VYN2Q3H7KCT
     TokenNotFound:
-      description: No token owned by the authenticated user has the supplied identifier.
+      description: The token is malformed, missing, noncanonical, or not owned by the current user.
       headers:
         X-Request-Id:
           $ref: "#/components/headers/RequestId"
@@ -390,14 +369,25 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
-          examples:
-            tokenNotFound:
-              value:
-                code: not_found
-                message: token not found
-                requestId: 27efef25-b8ad-4edf-a341-f10f4b4fc7f4
+          example:
+            code: not_found
+            message: token not found
+            requestId: 01J51X8R6M4B9D5VYN2Q3H7KCT
+    ValidationFailed:
+      description: Query syntax or token input violates the documented constraints.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/RequestId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: validation_failed
+            message: request is invalid
+            requestId: 01J51X8R6M4B9D5VYN2Q3H7KCT
     InternalError:
-      description: An unexpected internal error occurred; implementation details are not exposed.
+      description: Internal failure without implementation detail disclosure.
       headers:
         X-Request-Id:
           $ref: "#/components/headers/RequestId"
@@ -405,12 +395,10 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
-          examples:
-            internalError:
-              value:
-                code: internal_error
-                message: internal server error
-                requestId: 27efef25-b8ad-4edf-a341-f10f4b4fc7f4
+          example:
+            code: internal_error
+            message: internal server error
+            requestId: 01J51X8R6M4B9D5VYN2Q3H7KCT
 
   schemas:
     UUID:
@@ -418,20 +406,79 @@ components:
       format: uuid
       pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
       description: Canonical lowercase hyphenated UUID text.
-      example: 4b11513f-e003-4fd1-8e73-c573bee65e20
 
     Timestamp:
       type: string
       format: date-time
       description: RFC 3339 timestamp.
-      example: "2026-08-10T00:00:00Z"
 
-    ImplementedManagementHealth:
+    Error:
       type: object
       additionalProperties: false
-      required:
-        - status
-        - checks
+      required: [code, message, requestId]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        requestId:
+          type: string
+          pattern: "^[0-9A-HJKMNP-TV-Z]{26}$"
+        details:
+          type: string
+          description: Optional safe text; clients must branch on code, not this value.
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 1
+        password:
+          type: string
+          minLength: 1
+          writeOnly: true
+
+    LoginResult:
+      type: object
+      additionalProperties: false
+      required: [username, token, expiresAt]
+      properties:
+        username:
+          type: string
+          minLength: 1
+        token:
+          type: string
+          minLength: 1
+          description: Fixed 30-day stateless HS256 management JWT.
+        expiresAt:
+          $ref: "#/components/schemas/Timestamp"
+
+    LoginSuccess:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/LoginResult"
+
+    HealthCheck:
+      type: object
+      additionalProperties: false
+      required: [name, status]
+      properties:
+        name:
+          type: string
+          const: backend
+        status:
+          type: string
+          const: ok
+
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status, checks]
       properties:
         status:
           type: string
@@ -440,91 +487,108 @@ components:
           type: array
           minItems: 1
           maxItems: 1
-          prefixItems:
-            - type: object
-              additionalProperties: false
-              required:
-                - name
-                - status
-              properties:
-                name:
-                  type: string
-                  const: backend
-                status:
-                  type: string
-                  const: ok
-          items: false
+          items:
+            $ref: "#/components/schemas/HealthCheck"
 
-    TokenScope:
+    HealthSuccess:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/Health"
+
+    TokenPreset:
       type: string
-      enum:
-        - marketplace.read
-        - plugin.read
-        - repository.read
-        - repository.write
-        - token.read
-        - token.write
+      enum: [sub-read, git-clone, git-write]
+      description: Cumulative subscription/Git capability; never broader than the owner's current authorization.
+
+    TokenStatus:
+      type: string
+      enum: [active, expired, revoked]
 
     TokenMetadata:
       type: object
       additionalProperties: false
-      required:
-        - id
-        - name
-        - scopes
-        - createdAt
+      required: [id, name, preset, status, expiresAt, lastUsedAt, revokedAt, createdAt]
       properties:
         id:
           $ref: "#/components/schemas/UUID"
         name:
           type: string
           minLength: 1
-          description: Human-readable token name.
-          example: CI
-        scopes:
-          type: array
-          minItems: 1
-          uniqueItems: true
-          items:
-            $ref: "#/components/schemas/TokenScope"
+          description: Trimmed human-readable name, limited by the runtime to 128 UTF-8 bytes.
+        preset:
+          $ref: "#/components/schemas/TokenPreset"
+        status:
+          $ref: "#/components/schemas/TokenStatus"
         expiresAt:
-          $ref: "#/components/schemas/Timestamp"
+          oneOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
         lastUsedAt:
-          $ref: "#/components/schemas/Timestamp"
+          oneOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
         revokedAt:
-          $ref: "#/components/schemas/Timestamp"
+          oneOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
         createdAt:
           $ref: "#/components/schemas/Timestamp"
 
-    CreatedToken:
+    CreateTokenRequest:
+      type: object
+      required: [name, preset]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          description: Trimmed value must be nonempty and at most 128 UTF-8 bytes.
+        preset:
+          $ref: "#/components/schemas/TokenPreset"
+        expiresAt:
+          oneOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
+          description: Optional expiration strictly later than creation time.
+
+    RevealTokenRequest:
+      type: object
+      required: [password]
+      properties:
+        password:
+          type: string
+          minLength: 1
+          writeOnly: true
+
+    RevealedToken:
       type: object
       additionalProperties: false
-      required:
-        - id
-        - name
-        - scopes
-        - createdAt
-        - token
+      required: [id, name, preset, status, expiresAt, lastUsedAt, revokedAt, createdAt, token]
       properties:
         id:
           $ref: "#/components/schemas/UUID"
         name:
           type: string
           minLength: 1
-          description: Human-readable token name.
-          example: CI
-        scopes:
-          type: array
-          minItems: 1
-          uniqueItems: true
-          items:
-            $ref: "#/components/schemas/TokenScope"
+          description: Trimmed human-readable name, limited by the runtime to 128 UTF-8 bytes.
+        preset:
+          $ref: "#/components/schemas/TokenPreset"
+        status:
+          $ref: "#/components/schemas/TokenStatus"
         expiresAt:
-          $ref: "#/components/schemas/Timestamp"
+          oneOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
         lastUsedAt:
-          $ref: "#/components/schemas/Timestamp"
+          oneOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
         revokedAt:
-          $ref: "#/components/schemas/Timestamp"
+          oneOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
         createdAt:
           $ref: "#/components/schemas/Timestamp"
         token:
@@ -532,90 +596,66 @@ components:
           minLength: 48
           maxLength: 48
           pattern: "^mpsk_[A-Za-z0-9_-]{43}$"
-          description: One-time plaintext personal access token, disclosed only at creation.
-          example: mpsk_0123456789abcdefghijklmnopqrstuvwxyzABCDEFG
+          description: Repeatably revealable plaintext PAT.
 
-    CreateTokenRequest:
+    CreatedTokenSuccess:
       type: object
       additionalProperties: false
-      required:
-        - name
-        - scopes
-      properties:
-        name:
-          type: string
-          minLength: 1
-          description: |
-            Name trimmed by the service; the trimmed UTF-8 value must be nonempty
-            and at most 128 bytes.
-          x-runtime-maxBytes: 128
-          x-runtime-constraint: Trimmed UTF-8 byte count; whitespace-only values are rejected and standard JSON Schema length keywords do not enforce these rules.
-          example: CI
-        scopes:
-          type: array
-          minItems: 1
-          items:
-            $ref: "#/components/schemas/TokenScope"
-        expiresAt:
-          oneOf:
-            - $ref: "#/components/schemas/Timestamp"
-            - type: "null"
-          description: Optional expiration strictly later than creation time.
-
-    CreateTokenResponse:
-      type: object
-      additionalProperties: false
-      required:
-        - data
+      required: [data]
       properties:
         data:
-          $ref: "#/components/schemas/CreatedToken"
+          $ref: "#/components/schemas/RevealedToken"
 
-    ListTokensData:
+    RevealedTokenSuccess:
       type: object
       additionalProperties: false
-      required:
-        - items
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/RevealedToken"
+
+    PageMeta:
+      type: object
+      additionalProperties: false
+      required: [page, size, total]
+      properties:
+        page:
+          type: integer
+          minimum: 1
+        size:
+          type: integer
+          minimum: 1
+          maximum: 100
+        total:
+          type: integer
+          format: int64
+          minimum: 0
+
+    TokenPageData:
+      type: object
+      additionalProperties: false
+      required: [items, page, size, total]
       properties:
         items:
           type: array
-          maxItems: 100
           items:
             $ref: "#/components/schemas/TokenMetadata"
-        nextCursor:
-          type: string
-          description: Opaque cursor included only when a subsequent page exists.
-          x-runtime-maxBytes: 1024
-          x-runtime-constraint: UTF-8 byte count; standard JSON Schema length keywords do not enforce this limit.
+        page:
+          type: integer
+          minimum: 1
+        size:
+          type: integer
+          minimum: 1
+          maximum: 100
+        total:
+          type: integer
+          format: int64
+          minimum: 0
 
-    Error:
+    TokenPageSuccess:
       type: object
       additionalProperties: false
-      description: |
-        Direct stable error object. It is never wrapped in `data`. Current token
-        handlers omit `details`; the generic helper permits an optional JSON value.
-      required:
-        - code
-        - message
-        - requestId
+      required: [data]
       properties:
-        code:
-          type: string
-          description: Stable machine-readable error code.
-          examples:
-            - validation_failed
-        message:
-          type: string
-          description: Human-readable message; clients must not treat it as an enum.
-          examples:
-            - request is invalid
-        requestId:
-          type: string
-          minLength: 1
-          x-runtime-maxBytes: 128
-          x-runtime-constraint: UTF-8 byte count; standard JSON Schema length keywords do not enforce this limit.
-          description: Correlation identifier matching the `X-Request-Id` response header.
-          examples:
-            - 27efef25-b8ad-4edf-a341-f10f4b4fc7f4
-        details:
-          description: Optional structured details. Current PAT errors do not populate this field.
+        data:
+          $ref: "#/components/schemas/TokenPageData"

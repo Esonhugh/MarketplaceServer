@@ -10,7 +10,8 @@ import (
 	"testing"
 	"time"
 
-	identitydomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity"
+	identitydao "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/dao"
+	identitymodel "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/model"
 	"github.com/Esonhugh/MarketplaceServer/pkg/distributionservice"
 	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
@@ -44,7 +45,7 @@ func TestPostgresDistributionConstraints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open PostgreSQL integration schema: %v", err)
 	}
-	if err := identitydomain.Migrate(db); err != nil {
+	if err := identitydao.Migrate(db); err != nil {
 		t.Fatalf("migrate identity dependencies: %v", err)
 	}
 	if err := Migrate(db); err != nil {
@@ -159,7 +160,7 @@ func insertConstraintFixture(t *testing.T, db *gorm.DB) constraintFixture {
 	}
 	now := time.Now().UTC()
 	values := []any{
-		&identitydomain.Namespace{ID: fixture.namespaceID, Kind: identitydomain.NamespaceKindTeam, Slug: "security", DisplayName: "Security"},
+		&identitymodel.Namespace{ID: fixture.namespaceID, Kind: identitymodel.NamespaceKindTeam, Slug: "security", DisplayName: "Security"},
 		&Repository{ID: fixture.repositoryID, NamespaceID: fixture.namespaceID, Slug: "scanner", Visibility: "public", Status: RepositoryStatusReady, StorageKey: uuid.NewString()},
 		&Plugin{ID: fixture.pluginID, NamespaceID: fixture.namespaceID, RepositoryID: fixture.repositoryID, Slug: "scanner", Name: "Scanner", Visibility: "public", Status: StatusActive},
 		&PluginVersion{ID: fixture.versionID, PluginID: fixture.pluginID, Version: "1.0.0", TagName: "v1.0.0", CommitSHA: strings.Repeat("a", 40), ManifestDigest: strings.Repeat("b", 64), ManifestSnapshot: []byte(`{}`), Status: StatusActive, PublishedAt: now},

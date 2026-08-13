@@ -12,7 +12,8 @@ type CredentialKind string
 const (
 	CredentialNone            CredentialKind = "none"
 	CredentialAccountPassword CredentialKind = "account_password"
-	CredentialAPIKey          CredentialKind = "api_key"
+	CredentialJWT             CredentialKind = "jwt"
+	CredentialPAT             CredentialKind = "pat"
 )
 
 // Action identifies an operation that can be authorized or placed in a scope.
@@ -106,7 +107,9 @@ func NewUserPrincipal(userID, username string, credential CredentialKind, scopes
 	if username == "" {
 		return Principal{}, errors.New("auth: username is required")
 	}
-	if credential != CredentialAccountPassword && credential != CredentialAPIKey {
+	switch credential {
+	case CredentialAccountPassword, CredentialJWT, CredentialPAT:
+	default:
 		return Principal{}, errors.New("auth: invalid user credential kind")
 	}
 	return Principal{
@@ -133,9 +136,22 @@ func cloneScopes(scopes ScopeSet) ScopeSet {
 	return RestrictedScopes(scopes.Actions()...)
 }
 
-// BasicAuthenticator validates an HTTP Basic username/password pair.
-type BasicAuthenticator interface {
-	AuthenticateBasic(ctx context.Context, username, password string) (Principal, error)
+// GitOperation identifies the capability required by a Git protocol request.
+type GitOperation string
+
+const (
+	GitOperationRead  GitOperation = "read"
+	GitOperationWrite GitOperation = "write"
+)
+
+// GitPATAuthenticator accepts only a PAT appropriate for the requested Git operation.
+type GitPATAuthenticator interface {
+	AuthenticateGitPAT(ctx context.Context, username, plaintext string, operation GitOperation) (Principal, error)
+}
+
+// SubscriptionPATAuthenticator accepts only a PAT with subscription read capability.
+type SubscriptionPATAuthenticator interface {
+	AuthenticateSubscriptionPAT(ctx context.Context, username, plaintext string) (Principal, error)
 }
 
 // Authorizer decides whether a principal can perform an action on a resource.

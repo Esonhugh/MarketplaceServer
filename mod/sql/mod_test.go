@@ -5,6 +5,8 @@ import (
 	stdsql "database/sql"
 	"database/sql/driver"
 	"fmt"
+	"io"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -129,6 +131,39 @@ func TestPreInitRequiresDSNBeforeOpeningDatabase(t *testing.T) {
 	}
 }
 
+func TestPreInitDebugLogsSQLWithoutBoundSecrets(t *testing.T) {
+	const (
+		pat       = "mkt_pat_plaintext_7e2f8139"
+		hmacValue = "4f5624c7e512dd8e43f7188424677df3c83ec9d8d409422d688440a4fb3d1f5b"
+		dsnValue  = "postgres://bound-user:bound-password@db.example.invalid/marketplace"
+	)
+	fakeDB, _, _ := newTrackedGormDB(t)
+	m := &Mod{
+		config: Config{Driver: "postgres", DSN: "test-dsn", Debug: true},
+		opener: func(_ gorm.Dialector, cfg *gorm.Config) (*gorm.DB, error) {
+			fakeDB.Config.Logger = cfg.Logger
+			return fakeDB, nil
+		},
+	}
+
+	logs := captureStdout(t, func() {
+		if err := m.PreInit(newTestHub()); err != nil {
+			t.Fatalf("PreInit() returned error: %v", err)
+		}
+		if result := m.db.Exec("UPDATE credentials SET pat = ?, hmac = ?, callback_dsn = ?", pat, hmacValue, dsnValue); result.Error != nil {
+			t.Fatalf("Exec() returned error: %v", result.Error)
+		}
+	})
+	if !strings.Contains(logs, "UPDATE credentials SET pat = ?, hmac = ?, callback_dsn = ?") {
+		t.Fatalf("debug log did not contain parameterized SQL: %q", logs)
+	}
+	for _, secret := range []string{pat, hmacValue, dsnValue, "bound-password"} {
+		if strings.Contains(logs, secret) {
+			t.Fatalf("debug log leaked bound secret %q: %q", secret, logs)
+		}
+	}
+}
+
 func TestPreInitMapsGormDBAndAppliesStablePoolSettings(t *testing.T) {
 	fakeDB, _, tracker := newTrackedGormDB(t)
 	var openedDialector string
@@ -228,6 +263,30 @@ func TestStopClosesDatabaseAndMarksWaitGroupDone(t *testing.T) {
 	if got := tracker.closes.Load(); got == 0 {
 		t.Fatal("Stop() did not close the underlying database connection")
 	}
+}
+
+func captureStdout(t *testing.T, run func()) string {
+	t.Helper()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create stdout pipe: %v", err)
+	}
+	oldStdout := os.Stdout
+	os.Stdout = writer
+	defer func() { os.Stdout = oldStdout }()
+
+	run()
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close stdout writer: %v", err)
+	}
+	output, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("read stdout: %v", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("close stdout reader: %v", err)
+	}
+	return string(output)
 }
 
 func waitForWaitGroup(t *testing.T, wg *sync.WaitGroup) {

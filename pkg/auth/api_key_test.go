@@ -96,6 +96,24 @@ func TestAPIKeyIndexUsesCompletePlaintextKey(t *testing.T) {
 	}
 }
 
+func TestAPIKeyIndexValidation(t *testing.T) {
+	t.Parallel()
+
+	key := "mpsk_" + base64.RawURLEncoding.EncodeToString(make([]byte, auth.APIKeyRandomBytes))
+	index, err := auth.IndexAPIKey(key, []byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.ValidateAPIKeyIndex(index); err != nil {
+		t.Fatalf("ValidateAPIKeyIndex(valid) = %v", err)
+	}
+	for _, malformed := range []string{"", auth.APIKeyIndexPrefix, auth.APIKeyIndexPrefix + strings.Repeat("A", 42), auth.APIKeyIndexPrefix + strings.Repeat("A", 44), auth.APIKeyIndexPrefix + strings.Repeat("+", 43)} {
+		if err := auth.ValidateAPIKeyIndex(malformed); !errors.Is(err, auth.ErrMalformedAPIKeyIndex) {
+			t.Fatalf("ValidateAPIKeyIndex(%q) = %v", malformed, err)
+		}
+	}
+}
+
 func TestAPIKeyIndexRejectsWeakPepperAndMalformedKeys(t *testing.T) {
 	t.Parallel()
 

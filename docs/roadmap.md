@@ -14,14 +14,13 @@ This roadmap is the authoritative future delivery order. Items listed here are p
 - Before protected default-branch/tag updates, export proposed commits in isolation, run `claude plugin validate`, and require exact manifest/Plugin name equality; tag validation is strict.
 - Add bounded repository size, request size, push concurrency, operation quotas, durable push events, and ref reconciliation.
 
-### Authentication hardening
+### Authentication hardening remaining work
 
-- Add `POST /api/v1/auth/login` issuing a stateless fixed 30-day HS256 JWT containing only username/iat/exp; frontend localStorage keeps only username and JWT.
-- Keep management API on anonymous public allowlist plus Bearer JWT; PAT is only for subscription read and development Git clone/write capabilities.
-- Replace arbitrary PAT scopes with cumulative `sub-read`, `git-clone`, and `git-write` presets; add owner-only repeatable reveal and page/size/total management.
-- Define optional PAT expiry and current resource-policy intersection; PAT never expands user authorization.
+Login、固定 30 天 HS256 JWT、management Bearer-only、PAT 三档 preset、可选 expiry、owner reveal、page/size/total、credential plane separation 与当前 resource-policy intersection 已实现，见 [current-state.md](current-state.md)。后续只保留未交付项：
+
 - Add authentication and token lifecycle audit events without logging password, PAT, Authorization, or request bodies.
 - Add operator-supported secret rotation procedures for PAT peppers and bootstrap credentials; JWT key-ring rotation remains deferred.
+- Add an explicit non-development migration/rotation plan for legacy PAT schemas; current startup guard refuses automatic backfill or destructive conversion.
 
 ### Production verification
 
@@ -78,9 +77,11 @@ This roadmap is the authoritative future delivery order. Items listed here are p
 - Add SSH Marketplace source variants and installation guidance.
 - Verify HTTPS and SSH authorization parity with real Git clients.
 
-## Then: Svelte management frontend
+## Then: complete the Svelte management frontend
 
-- Implement login and first-run setup flows.
+Login 与当前用户 PAT management 页面已实现；first-run setup 和其余管理流程仍未交付。
+
+- Implement first-run setup flow.
 - Add namespace switching and user/team management.
 - Add Plugin, version, Marketplace, credential, and audit pages; repository details remain hidden behind the Plugin product model.
 - Display HTTPS and SSH clone/install instructions without exposing secrets.

@@ -19,7 +19,7 @@ go build ./...
 go test -race ./...
 ```
 
-PostgreSQL-backed constraint 与 production-wiring tests 需要 `MARKETPLACE_TEST_POSTGRES_DSN`。未提供时测试会显式 skip；结果报告必须说明未执行的数据库覆盖，不能写成全部通过。
+PostgreSQL-backed constraint 与 production-wiring tests 需要 `MARKETPLACE_TEST_POSTGRES_DSN`。未提供时测试会显式 skip；结果报告必须说明未执行的数据库覆盖，不能写成全部通过。仓库包含 MySQL migration 分支，但未实际运行 MySQL suite 时也不得声称 MySQL 已验证。
 
 ### Frontend 变更
 
@@ -79,6 +79,12 @@ Go toolchain 版本以 `go.mod` 为准。支持配置键和安全示例以 [`con
 
 标准 release build 顺序：frontend lockfile install → static build → Go test/vet/build。`go build` 不会自动执行 `go generate`；CI、Docker 和 release script 必须显式生成 frontend dist。
 
+## Identity schema 启动保护
+
+Identity migration 在以下任一情况返回 `identity: legacy credential schema requires operator rebuild` 并拒绝 backend 启动：存在旧 `personal_access_token_scopes` table，或已有 `personal_access_tokens` 缺少 `preset`、`secret_plaintext`、`secret_hmac`。该 guard 位于 `mod/backend/domain/identity/dao/migrate.go`，不会自动 drop、backfill 或启用双读 compatibility。
+
+开发数据库若可丢弃，operator 应先停止服务、确认没有需保留数据，再使用所选数据库的管理工具删除并重建整个开发 database/schema，然后重新启动让 migration 和 bootstrap 创建目标 schema。仓库不提供通用 destructive 命令，因为 PostgreSQL/MySQL、权限和部署形态不同。生产或任何有价值环境必须先备份，评估旧 PAT 的 revoke/rotation，并交付显式迁移方案；不得直接采用开发重建流程。
+
 ## 持久化数据
 
 生产部署至少需要持久化：
@@ -137,8 +143,8 @@ TLS ingress / reverse proxy
 ## Runtime security
 
 - 进程以非 root 用户运行，container root filesystem 尽量只读，只给 Git storage 和明确 temp path 写权限。
-- database credential、PAT pepper、bootstrap credential、JWT secret、future SSH host key 由 secret manager 或 protected mount/environment 提供；YAML `jwtSecret` fallback 只用于明确的开发配置。
-- 按 ADR-0006 获批的 `secret_plaintext` 使关系数据库与备份进入 credential trust boundary；其访问、导出和恢复按 secret material 保护。
+- database credential、PAT pepper、bootstrap credential、JWT secret、future SSH host key 由 secret manager 或 protected mount/environment 提供；YAML `backend.jwtSecret` fallback 只用于明确的开发配置，生产使用优先级更高的 `MARKETPLACE_JWT_SECRET`。
+- 按 ADR-0006 获批的 repeatably revealable PAT `secret_plaintext` 使关系数据库、replica、dump、snapshot、PITR archive 与备份进入 credential trust boundary；访问、导出、传输、恢复和销毁都按可直接使用的 credential secret material 保护。
 - 日志不得包含 password、token、Authorization、private key、secret-bearing URL、pack body 或完整敏感 config。
 - 固定并验证 Go、Git、Node 依赖版本；最终生产镜像不包含 npm、compiler 和不需要的工具。
 - 诊断 endpoint 默认可关闭并受强认证，禁止硬编码 pprof credential。

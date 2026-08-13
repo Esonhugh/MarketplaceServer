@@ -16,11 +16,11 @@ import (
 // UserMarketplaceJSONHandler is deliberately unregistered here. Backend route
 // wiring is owned by the concurrent backend task.
 type UserMarketplaceJSONHandler struct {
-	authenticator auth.BasicAuthenticator
+	authenticator auth.SubscriptionPATAuthenticator
 	service       *distributiondomain.UserMarketplaceService
 }
 
-func NewUserMarketplaceJSONHandler(authenticator auth.BasicAuthenticator, service *distributiondomain.UserMarketplaceService) *UserMarketplaceJSONHandler {
+func NewUserMarketplaceJSONHandler(authenticator auth.SubscriptionPATAuthenticator, service *distributiondomain.UserMarketplaceService) *UserMarketplaceJSONHandler {
 	return &UserMarketplaceJSONHandler{authenticator: authenticator, service: service}
 }
 
@@ -36,8 +36,8 @@ func (handler *UserMarketplaceJSONHandler) Get(c *jin.Context) {
 		http.NotFound(c.Writer, request)
 		return
 	}
-	principal, err := handler.authenticator.AuthenticateBasic(request.Context(), providedUsername, password)
-	if err != nil || !principal.IsUser() || subtle.ConstantTimeCompare([]byte(username), []byte(principal.Username())) != 1 {
+	principal, err := handler.authenticator.AuthenticateSubscriptionPAT(request.Context(), providedUsername, password)
+	if err != nil || !principal.IsUser() || principal.CredentialKind() != auth.CredentialPAT || subtle.ConstantTimeCompare([]byte(username), []byte(principal.Username())) != 1 {
 		http.NotFound(c.Writer, request)
 		return
 	}

@@ -1,0 +1,29 @@
+@baseUrl = http://localhost:8080
+@username = admin
+@pat = mpsk_replace-with-git-personal-access-token
+@namespace = default
+@repository = replace-with-plugin-repository
+@marketplaceKey = replace-with-marketplace-public-key
+@pluginDistributionId = 00000000-0000-0000-0000-000000000000
+
+### Advertise development repository read refs
+GET {{baseUrl}}/git/{{namespace}}/{{repository}}.git/info/refs?service=git-upload-pack
+Accept: application/x-git-upload-pack-advertisement
+Authorization: Basic {{username}} {{pat}}
+
+### Advertise development repository write refs
+GET {{baseUrl}}/git/{{namespace}}/{{repository}}.git/info/refs?service=git-receive-pack
+Accept: application/x-git-receive-pack-advertisement
+Authorization: Basic {{username}} {{pat}}
+
+### Advertise public Marketplace projection
+GET {{baseUrl}}/distribution/marketplaces/{{marketplaceKey}}.git/info/refs?service=git-upload-pack
+Accept: application/x-git-upload-pack-advertisement
+
+### Advertise public Plugin projection
+GET {{baseUrl}}/distribution/plugins/{{pluginDistributionId}}.git/info/refs?service=git-upload-pack
+Accept: application/x-git-upload-pack-advertisement
+
+# Smart HTTP RPC bodies use Git pkt-line binary payloads. Exercise clone, fetch,
+# and push with a real Git client rather than placing credentials or captured
+# pack data in this file.

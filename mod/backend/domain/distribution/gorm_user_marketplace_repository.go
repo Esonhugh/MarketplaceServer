@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	identitydomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity"
+	identitymodel "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/model"
 	"gorm.io/gorm"
 )
 
@@ -27,7 +27,7 @@ func NewGORMUserMarketplaceRepository(db *gorm.DB) (*GORMUserMarketplaceReposito
 func (repository *GORMUserMarketplaceRepository) FindUserMarketplace(ctx context.Context, username string) (UserMarketplace, error) {
 	var result UserMarketplace
 	err := repository.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var user identitydomain.User
+		var user identitymodel.User
 		if err := tx.
 			Select("id", "username", "display_name", "status").
 			Where("username = ?", username).
@@ -37,10 +37,10 @@ func (repository *GORMUserMarketplaceRepository) FindUserMarketplace(ctx context
 			}
 			return fmt.Errorf("find marketplace user: %w", err)
 		}
-		var namespace identitydomain.Namespace
+		var namespace identitymodel.Namespace
 		if err := tx.
 			Select("id", "slug").
-			Where("kind = ? AND owner_user_id = ?", identitydomain.NamespaceKindUser, user.ID).
+			Where("kind = ? AND owner_user_id = ?", identitymodel.NamespaceKindUser, user.ID).
 			Take(&namespace).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrUserMarketplaceNotFound

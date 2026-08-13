@@ -1,4 +1,4 @@
-package identity
+package model
 
 import (
 	"errors"
@@ -7,12 +7,17 @@ import (
 	"time"
 
 	"github.com/Esonhugh/MarketplaceServer/pkg/auth"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
 const (
 	UserStatusActive   = "active"
 	UserStatusDisabled = "disabled"
+
+	TokenPresetSubscriptionRead = "sub-read"
+	TokenPresetGitClone         = "git-clone"
+	TokenPresetGitWrite         = "git-write"
 
 	NamespaceKindUser = "user"
 	NamespaceKindTeam = "team"
@@ -26,13 +31,26 @@ const (
 var (
 	ErrImmutableSystemGroup       = errors.New("identity: system groups are immutable")
 	ErrPersistedDefaultMembership = errors.New("identity: default group membership is dynamic and must not be persisted")
-	ErrInvalidTokenScope          = errors.New("identity: invalid token scope")
+	ErrInvalidTokenPreset         = errors.New("identity: invalid token preset")
+	ErrInvalidPersonalAccessToken = errors.New("identity: invalid personal access token")
 	ErrInvalidUser                = errors.New("identity: invalid user")
 	ErrInvalidNamespace           = errors.New("identity: invalid namespace")
 	ErrInvalidSystemGroup         = errors.New("identity: invalid fixed system group")
 )
 
 var canonicalIdentitySlug = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+
+var migrationModels = []any{
+	&User{},
+	&Namespace{},
+	&SystemGroup{},
+	&UserGroupMembership{},
+	&PersonalAccessToken{},
+}
+
+func MigrationModels() []any {
+	return append([]any(nil), migrationModels...)
+}
 
 type User struct {
 	ID           string    `gorm:"type:char(36);primaryKey"`
@@ -48,7 +66,7 @@ type User struct {
 func (User) TableName() string { return "users" }
 
 func (user *User) BeforeCreate(*gorm.DB) error {
-	if user.Username != normalizeUsername(user.Username) || len(user.Username) > 64 || !canonicalIdentitySlug.MatchString(user.Username) {
+	if user.Username != NormalizeUsername(user.Username) || len(user.Username) > 64 || !canonicalIdentitySlug.MatchString(user.Username) {
 		return ErrInvalidUser
 	}
 	if user.Status != UserStatusActive && user.Status != UserStatusDisabled {
@@ -77,7 +95,7 @@ type Namespace struct {
 func (Namespace) TableName() string { return "namespaces" }
 
 func (namespace *Namespace) BeforeCreate(*gorm.DB) error {
-	if namespace.Slug != normalizeUsername(namespace.Slug) || len(namespace.Slug) > 128 || !canonicalIdentitySlug.MatchString(namespace.Slug) {
+	if namespace.Slug != NormalizeUsername(namespace.Slug) || len(namespace.Slug) > 128 || !canonicalIdentitySlug.MatchString(namespace.Slug) {
 		return ErrInvalidNamespace
 	}
 	switch namespace.Kind {
@@ -113,14 +131,14 @@ func (group *SystemGroup) BeforeCreate(*gorm.DB) error {
 }
 
 func (group *SystemGroup) BeforeUpdate(*gorm.DB) error {
-	if isFixedSystemGroup(group.ID) {
+	if IsFixedSystemGroup(group.ID) {
 		return ErrImmutableSystemGroup
 	}
 	return nil
 }
 
 func (group *SystemGroup) BeforeDelete(*gorm.DB) error {
-	if isFixedSystemGroup(group.ID) {
+	if IsFixedSystemGroup(group.ID) {
 		return ErrImmutableSystemGroup
 	}
 	return nil
@@ -151,37 +169,46 @@ func (membership *UserGroupMembership) BeforeUpdate(*gorm.DB) error {
 }
 
 type PersonalAccessToken struct {
-	ID         string     `gorm:"type:char(36);primaryKey"`
-	UserID     string     `gorm:"type:char(36);not null;index"`
-	Name       string     `gorm:"size:128;not null"`
-	SecretHMAC string     `gorm:"size:128;not null;uniqueIndex:uidx_personal_access_tokens_secret_hmac"`
-	ExpiresAt  *time.Time `gorm:"index"`
-	LastUsedAt *time.Time
-	RevokedAt  *time.Time                 `gorm:"index"`
-	CreatedAt  time.Time                  `gorm:"not null"`
-	UpdatedAt  time.Time                  `gorm:"not null"`
-	User       User                       `gorm:"constraint:OnUpdate:RESTRICT,OnDelete:CASCADE"`
-	Scopes     []PersonalAccessTokenScope `gorm:"foreignKey:TokenID;constraint:OnUpdate:RESTRICT,OnDelete:CASCADE"`
+	ID              string     `gorm:"type:char(36);primaryKey"`
+	UserID          string     `gorm:"type:char(36);not null;index:idx_personal_access_tokens_owner_page,priority:1"`
+	Name            string     `gorm:"size:128;not null"`
+	Preset          string     `gorm:"size:32;not null;check:chk_personal_access_tokens_preset,preset IN ('sub-read','git-clone','git-write')"`
+	SecretPlaintext string     `gorm:"size:64;not null"`
+	SecretHMAC      string     `gorm:"size:128;not null;uniqueIndex:uidx_personal_access_tokens_secret_hmac"`
+	ExpiresAt       *time.Time `gorm:"index;check:chk_personal_access_tokens_expiry,expires_at IS NULL OR expires_at > created_at"`
+	LastUsedAt      *time.Time
+	RevokedAt       *time.Time `gorm:"index"`
+	CreatedAt       time.Time  `gorm:"not null;index:idx_personal_access_tokens_owner_page,priority:2,sort:desc"`
+	UpdatedAt       time.Time  `gorm:"not null"`
+	User            User       `gorm:"constraint:OnUpdate:RESTRICT,OnDelete:CASCADE"`
 }
 
 func (PersonalAccessToken) TableName() string { return "personal_access_tokens" }
 
-type PersonalAccessTokenScope struct {
-	TokenID string              `gorm:"type:char(36);primaryKey"`
-	Action  auth.Action         `gorm:"size:128;primaryKey;check:chk_personal_access_token_scopes_action,action IN ('marketplace.read','plugin.read','repository.read','repository.write','token.read','token.write')"`
-	Token   PersonalAccessToken `gorm:"constraint:OnUpdate:RESTRICT,OnDelete:CASCADE"`
-}
-
-func (PersonalAccessTokenScope) TableName() string { return "personal_access_token_scopes" }
-
-func (scope *PersonalAccessTokenScope) BeforeSave(*gorm.DB) error {
-	if !isSupportedScope(scope.Action) {
-		return ErrInvalidTokenScope
+func (token *PersonalAccessToken) BeforeCreate(*gorm.DB) error {
+	if token == nil || !isCanonicalUUID(token.ID) || !isCanonicalUUID(token.UserID) ||
+		auth.ValidateAPIKey(token.SecretPlaintext) != nil || auth.ValidateAPIKeyIndex(token.SecretHMAC) != nil {
+		return ErrInvalidPersonalAccessToken
+	}
+	if !IsSupportedPreset(token.Preset) {
+		return ErrInvalidTokenPreset
+	}
+	if token.ExpiresAt != nil && !token.ExpiresAt.After(token.CreatedAt) {
+		return ErrInvalidPersonalAccessToken
 	}
 	return nil
 }
 
-func isFixedSystemGroup(id string) bool {
+func NormalizeUsername(username string) string {
+	return strings.ToLower(strings.TrimSpace(username))
+}
+
+func isCanonicalUUID(value string) bool {
+	parsed, err := uuid.Parse(value)
+	return err == nil && parsed.String() == value
+}
+
+func IsFixedSystemGroup(id string) bool {
 	return id == AdminSystemGroupID || id == DefaultSystemGroupID
 }
 
@@ -196,14 +223,9 @@ func isFixedSystemGroupDefinition(group SystemGroup) bool {
 	}
 }
 
-func isSupportedScope(action auth.Action) bool {
-	switch action {
-	case auth.ActionMarketplaceRead,
-		auth.ActionPluginRead,
-		auth.ActionRepositoryRead,
-		auth.ActionRepositoryWrite,
-		auth.ActionTokenRead,
-		auth.ActionTokenWrite:
+func IsSupportedPreset(preset string) bool {
+	switch preset {
+	case TokenPresetSubscriptionRead, TokenPresetGitClone, TokenPresetGitWrite:
 		return true
 	default:
 		return false

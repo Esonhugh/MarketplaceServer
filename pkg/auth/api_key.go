@@ -19,8 +19,9 @@ const (
 )
 
 var (
-	ErrMalformedAPIKey  = errors.New("auth: malformed API key")
-	ErrWeakAPIKeyPepper = errors.New("auth: API key pepper must be at least 32 bytes")
+	ErrMalformedAPIKey      = errors.New("auth: malformed API key")
+	ErrMalformedAPIKeyIndex = errors.New("auth: malformed API key index")
+	ErrWeakAPIKeyPepper     = errors.New("auth: API key pepper must be at least 32 bytes")
 )
 
 func GenerateAPIKey() (string, error) {
@@ -43,6 +44,18 @@ func ValidateAPIKey(plaintext string) error {
 	decoded, err := base64.RawURLEncoding.DecodeString(payload)
 	if err != nil || len(decoded) != APIKeyRandomBytes {
 		return ErrMalformedAPIKey
+	}
+	return nil
+}
+
+func ValidateAPIKeyIndex(index string) error {
+	if !strings.HasPrefix(index, APIKeyIndexPrefix) {
+		return ErrMalformedAPIKeyIndex
+	}
+	payload := strings.TrimPrefix(index, APIKeyIndexPrefix)
+	decoded, err := base64.RawURLEncoding.DecodeString(payload)
+	if err != nil || len(decoded) != sha256.Size || base64.RawURLEncoding.EncodeToString(decoded) != payload {
+		return ErrMalformedAPIKeyIndex
 	}
 	return nil
 }

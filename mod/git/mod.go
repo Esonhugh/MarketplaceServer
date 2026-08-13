@@ -45,7 +45,7 @@ type Mod struct {
 	projectionBuilder    gitservice.ProjectionBuilder
 	distributionResolver distributionservice.Resolver
 	resolver             gitservice.RepositoryResolver
-	basicAuthenticator   auth.BasicAuthenticator
+	gitPATAuthenticator  auth.GitPATAuthenticator
 	authorizer           auth.Authorizer
 	log                  *zap.SugaredLogger
 }
@@ -90,12 +90,12 @@ func (m *Mod) Load(hub *kernel.Hub) error {
 	if nilInterface(resolver) {
 		return errors.New("gitservice.RepositoryResolver from kernel is nil")
 	}
-	var basicAuthenticator auth.BasicAuthenticator
-	if err := hub.Load(&basicAuthenticator); err != nil {
-		return errors.New("can't load auth.BasicAuthenticator from kernel")
+	var gitPATAuthenticator auth.GitPATAuthenticator
+	if err := hub.Load(&gitPATAuthenticator); err != nil {
+		return errors.New("can't load auth.GitPATAuthenticator from kernel")
 	}
-	if nilInterface(basicAuthenticator) {
-		return errors.New("auth.BasicAuthenticator from kernel is nil")
+	if nilInterface(gitPATAuthenticator) {
+		return errors.New("auth.GitPATAuthenticator from kernel is nil")
 	}
 	var authorizer auth.Authorizer
 	if err := hub.Load(&authorizer); err != nil {
@@ -112,7 +112,7 @@ func (m *Mod) Load(hub *kernel.Hub) error {
 		return errors.New("distributionservice.Resolver from kernel is nil")
 	}
 	m.resolver = resolver
-	m.basicAuthenticator = basicAuthenticator
+	m.gitPATAuthenticator = gitPATAuthenticator
 	m.authorizer = authorizer
 	m.distributionResolver = distributionResolver
 	m.registerSmartHTTPRoutes(engine)
@@ -185,7 +185,7 @@ func (m *Mod) handleInfoRefs(c *jinengine.Context) {
 		writePlain(c, http.StatusNotFound, "unsupported git service\n")
 		return
 	}
-	repository, requestContext, ok := m.authorizeRepository(c, namespace, repositorySlug, action)
+	repository, requestContext, ok := m.authorizeRepository(c, namespace, repositorySlug, action, gitOperationForAction(action))
 	if !ok {
 		return
 	}
@@ -215,7 +215,7 @@ func (m *Mod) handleServiceRPC(c *jinengine.Context, service string, action auth
 		writePlain(c, http.StatusNotFound, "repository not found\n")
 		return
 	}
-	repository, requestContext, ok := m.authorizeRepository(c, namespace, repositorySlug, action)
+	repository, requestContext, ok := m.authorizeRepository(c, namespace, repositorySlug, action, gitOperationForAction(action))
 	if !ok || !contentLengthWithinLimit(c, m.config.maxRequestBytes) {
 		return
 	}
@@ -232,13 +232,13 @@ func (m *Mod) handleServiceRPC(c *jinengine.Context, service string, action auth
 // authorizeRepository resolves resource metadata before policy evaluation. Invalid
 // supplied credentials never downgrade to anonymous access, and no subprocess is
 // started until readiness and authorization both succeed.
-func (m *Mod) authorizeRepository(c *jinengine.Context, namespace, repositorySlug string, action auth.Action) (gitservice.Repository, context.Context, bool) {
+func (m *Mod) authorizeRepository(c *jinengine.Context, namespace, repositorySlug string, action auth.Action, operation auth.GitOperation) (gitservice.Repository, context.Context, bool) {
 	repository, err := m.resolver.Resolve(c.Request.Context(), namespace, repositorySlug)
 	if err != nil || validateRepositoryID(repository.ID) != nil || !repositoryAllowsAction(repository, action) {
 		writePlain(c, http.StatusNotFound, "repository not found\n")
 		return gitservice.Repository{}, nil, false
 	}
-	principal, supplied, err := m.authenticateRequest(c.Request)
+	principal, supplied, err := m.authenticateRequest(c.Request, operation)
 	if err != nil {
 		writeAuthenticationRequired(c)
 		return gitservice.Repository{}, nil, false
@@ -264,6 +264,13 @@ func (m *Mod) authorizeRepository(c *jinengine.Context, namespace, repositorySlu
 	return repository, requestContext, true
 }
 
+func gitOperationForAction(action auth.Action) auth.GitOperation {
+	if action == auth.ActionRepositoryWrite {
+		return auth.GitOperationWrite
+	}
+	return auth.GitOperationRead
+}
+
 func repositoryAllowsAction(repository gitservice.Repository, action auth.Action) bool {
 	switch action {
 	case auth.ActionRepositoryRead:
@@ -275,18 +282,18 @@ func repositoryAllowsAction(repository gitservice.Repository, action auth.Action
 	}
 }
 
-func (m *Mod) authenticateRequest(request *http.Request) (auth.Principal, bool, error) {
+func (m *Mod) authenticateRequest(request *http.Request, operation auth.GitOperation) (auth.Principal, bool, error) {
 	header := request.Header.Get("Authorization")
 	if header == "" {
 		return auth.AnonymousPrincipal(), false, nil
 	}
-	username, password, ok := request.BasicAuth()
-	if !ok || username == "" || password == "" {
-		return auth.Principal{}, true, errors.New("invalid basic credentials")
+	username, plaintext, ok := request.BasicAuth()
+	if !ok || username == "" || plaintext == "" {
+		return auth.Principal{}, true, errors.New("invalid git credentials")
 	}
-	principal, err := m.basicAuthenticator.AuthenticateBasic(request.Context(), username, password)
-	if err != nil || !principal.IsUser() {
-		return auth.Principal{}, true, errors.New("invalid basic credentials")
+	principal, err := m.gitPATAuthenticator.AuthenticateGitPAT(request.Context(), username, plaintext, operation)
+	if err != nil || !principal.IsUser() || principal.CredentialKind() != auth.CredentialPAT {
+		return auth.Principal{}, true, errors.New("invalid git credentials")
 	}
 	return principal, true, nil
 }

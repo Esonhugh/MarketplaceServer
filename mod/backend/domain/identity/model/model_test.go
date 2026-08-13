@@ -1,19 +1,21 @@
-package identity
+package model
 
 import (
 	"encoding/base64"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/Esonhugh/MarketplaceServer/pkg/auth"
+	"github.com/google/uuid"
 )
 
 func TestMigrationModelsFollowDependencyOrder(t *testing.T) {
 	want := []reflect.Type{
 		reflect.TypeOf(&User{}), reflect.TypeOf(&Namespace{}), reflect.TypeOf(&SystemGroup{}),
 		reflect.TypeOf(&UserGroupMembership{}), reflect.TypeOf(&PersonalAccessToken{}),
-		reflect.TypeOf(&PersonalAccessTokenScope{}),
 	}
 	models := MigrationModels()
 	if len(models) != len(want) {
@@ -86,19 +88,58 @@ func TestIdentityModelGuards(t *testing.T) {
 		t.Fatalf("default membership update error = %v", err)
 	}
 
-	scope := PersonalAccessTokenScope{Action: auth.Action("unknown")}
-	if err := scope.BeforeSave(nil); !errors.Is(err, ErrInvalidTokenScope) {
-		t.Fatalf("invalid scope save error = %v", err)
+	plaintext, err := auth.GenerateAPIKey()
+	if err != nil {
+		t.Fatal(err)
 	}
-}
+	secretHMAC, err := auth.IndexAPIKey(plaintext, []byte("01234567890123456789012345678901"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	validToken := PersonalAccessToken{ID: uuid.NewString(), UserID: uuid.NewString(), Preset: TokenPresetGitWrite, SecretPlaintext: plaintext, SecretHMAC: secretHMAC}
+	if err := validToken.BeforeCreate(nil); err != nil {
+		t.Fatalf("valid token error = %v", err)
+	}
+	for name, mutate := range map[string]func(*PersonalAccessToken){
+		"non-canonical ID":  func(token *PersonalAccessToken) { token.ID = strings.ToUpper(token.ID) },
+		"invalid owner ID":  func(token *PersonalAccessToken) { token.UserID = "user-1" },
+		"invalid plaintext": func(token *PersonalAccessToken) { token.SecretPlaintext = "mpsk_invalid" },
+		"empty HMAC":        func(token *PersonalAccessToken) { token.SecretHMAC = "" },
+		"malformed HMAC":    func(token *PersonalAccessToken) { token.SecretHMAC = auth.APIKeyIndexPrefix + "bad" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			token := validToken
+			mutate(&token)
+			if err := token.BeforeCreate(nil); !errors.Is(err, ErrInvalidPersonalAccessToken) {
+				t.Fatalf("invalid token error = %v", err)
+			}
+		})
+	}
+	invalidPreset := validToken
+	invalidPreset.Preset = "unknown"
+	if err := invalidPreset.BeforeCreate(nil); !errors.Is(err, ErrInvalidTokenPreset) {
+		t.Fatalf("invalid preset error = %v", err)
+	}
 
-func TestTokenScopes(t *testing.T) {
-	scopes, err := tokenScopes([]PersonalAccessTokenScope{{Action: auth.ActionRepositoryRead}})
-	if err != nil || !scopes.Allows(auth.ActionRepositoryRead) || scopes.Allows(auth.ActionRepositoryWrite) {
-		t.Fatalf("token scopes = %#v, %v", scopes, err)
+	createdAt := time.Date(2026, time.August, 12, 2, 0, 0, 0, time.UTC)
+	for name, expiresAt := range map[string]time.Time{
+		"equal to creation": createdAt,
+		"before creation":   createdAt.Add(-time.Nanosecond),
+	} {
+		t.Run("expiry "+name, func(t *testing.T) {
+			token := validToken
+			token.CreatedAt = createdAt
+			token.ExpiresAt = &expiresAt
+			if err := token.BeforeCreate(nil); !errors.Is(err, ErrInvalidPersonalAccessToken) {
+				t.Fatalf("invalid token expiry error = %v", err)
+			}
+		})
 	}
-	if _, err := tokenScopes([]PersonalAccessTokenScope{{Action: auth.Action("unknown")}}); !errors.Is(err, ErrInvalidTokenScope) {
-		t.Fatalf("invalid token scope error = %v", err)
+	validExpiry := createdAt.Add(time.Nanosecond)
+	validToken.CreatedAt = createdAt
+	validToken.ExpiresAt = &validExpiry
+	if err := validToken.BeforeCreate(nil); err != nil {
+		t.Fatalf("future token expiry error = %v", err)
 	}
 }
 
@@ -115,20 +156,5 @@ func TestAPIKeyPepperValidation(t *testing.T) {
 				t.Fatalf("APIKeyPepper error = %v", err)
 			}
 		})
-	}
-}
-
-func TestIdentityDatabaseHelpersRejectNil(t *testing.T) {
-	if _, err := NewRepository(nil); err == nil {
-		t.Fatal("NewRepository(nil) succeeded")
-	}
-	if _, err := NewBootstrapper(nil, nil); err == nil {
-		t.Fatal("NewBootstrapper(nil) succeeded")
-	}
-	if err := ensureSystemGroups(nil); err == nil {
-		t.Fatal("ensureSystemGroups(nil) succeeded")
-	}
-	if err := lockBootstrapTransaction(nil); err == nil {
-		t.Fatal("lockBootstrapTransaction(nil) succeeded")
 	}
 }

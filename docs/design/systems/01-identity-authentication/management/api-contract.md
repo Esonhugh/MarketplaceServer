@@ -9,7 +9,7 @@
 
 ## Authority
 
-精确 path、method、parameter、request/response schema、status、header 和 example 的完整权威是 proposed [management-v1-design.yaml](../../../../../api/openapi/management-v1-design.yaml)。本文只解释系统范围与 rationale；发生冲突时以 OpenAPI 为准。当前 deployed 行为仍以 [management-v1.yaml](../../../../../api/openapi/management-v1.yaml) 和 runtime tests 为准。
+精确已部署 path、method、parameter、request/response schema、status、header 和 example 的完整权威是 [management-v1.yaml](../../../../../api/openapi/management-v1.yaml)；[management-v1-design.yaml](../../../../../api/openapi/management-v1-design.yaml) 继续承载尚未实现的 broader management target。本文只解释 identity 系统范围与 rationale；发生冲突时以 deployed OpenAPI 和 runtime tests 为准。
 
 ## Operations
 
@@ -36,12 +36,14 @@ Login 和 health 是匿名 public allowlist；其他 management operations 只�
 - Reveal 是 `POST .../{tokenId}/reveal`，body 只有 password；错误密码返回 401，非 owner/未知 token 不泄露为其他用户资源。
 - Revoke 使用 DELETE 但语义是幂等 revoke，不是物理删除，成功 204。
 - Success/204 不要求 request ID。Error response 由框架生成 ULID `X-Request-Id`，body `requestId` 与 header 相同。
-- Secret response 不定义额外专用 cache header；frontend 可在当前内存会话保留 reveal 结果，但不能写 localStorage/sessionStorage。
+- Login、PAT create 与 reveal 都返回 `Cache-Control: private, no-store` 和 `Pragma: no-cache`；frontend 可在当前内存会话保留 reveal 结果，但不能写 localStorage/sessionStorage。
 
 ## Credential-plane separation
 
 PAT preset 不出现在 management security scheme 中。Git 和 subscription 的 Basic PAT credential boundary 分别见 [`git/api-contract.md`](../git/api-contract.md) 与 [`distribution/api-contract.md`](../distribution/api-contract.md)；本文件只记录 management 明确拒绝 PAT。
 
-## Compatibility
+## Implementation 与 compatibility
 
-当前 deployed PAT endpoints 使用 BasicAuth、cursor list、scope arrays，且没有 reveal。获批实现只保留本设计的目标 schema/API，不增加 legacy 双读、backfill 或 compatibility mode；开发数据按 implementation approval 重建。实现完成时必须同步 handler/tests、deployed OpenAPI、usage/current-state。
+Identity management operations 已按本设计部署：public login/health、PAT Bearer-only、page/size/total、preset、create/reveal plaintext 与幂等 revoke。旧 Basic/cursor/scope contract 已从 deployed OpenAPI 删除，未来 Plugin/Marketplace/team paths 未提升。
+
+Persistence 不增加 legacy 双读、backfill 或 compatibility mode。Startup guard 对旧 scope table 或缺少目标 PAT columns 的 schema 拒绝启动；开发环境由 operator 确认可丢弃后重建，非开发环境必须先备份并设计显式 migration/rotation。

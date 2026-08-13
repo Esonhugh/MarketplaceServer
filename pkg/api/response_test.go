@@ -26,14 +26,10 @@ func TestErrorResponseMarshalsRequiredFieldsAndOmitsEmptyDetails(t *testing.T) {
 	assertJSON(t, resp, `{"code":"unauthorized","message":"authentication required","requestId":"req_01HZX9E8WQ8P4Z0G3J7V6B2C1D"}`)
 }
 
-func TestErrorResponseIncludesDetailsWhenProvided(t *testing.T) {
-	details := struct {
-		Field string `json:"field"`
-	}{Field: "slug"}
+func TestErrorResponseIncludesSafeTextDetailsWhenProvided(t *testing.T) {
+	resp := api.NewErrorWithDetails("validation_failed", "invalid request", "req_02HZX9E8WQ8P4Z0G3J7V6B2C1E", "slug is invalid")
 
-	resp := api.NewErrorWithDetails("validation_failed", "invalid request", "req_02HZX9E8WQ8P4Z0G3J7V6B2C1E", details)
-
-	assertJSON(t, resp, `{"code":"validation_failed","message":"invalid request","requestId":"req_02HZX9E8WQ8P4Z0G3J7V6B2C1E","details":{"field":"slug"}}`)
+	assertJSON(t, resp, `{"code":"validation_failed","message":"invalid request","requestId":"req_02HZX9E8WQ8P4Z0G3J7V6B2C1E","details":"slug is invalid"}`)
 }
 
 func TestCursorListResponseMarshalsItemsAndNextCursor(t *testing.T) {

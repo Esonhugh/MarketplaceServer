@@ -16,7 +16,7 @@ import (
 	"github.com/Esonhugh/MarketplaceServer/core/kernel"
 	backendmod "github.com/Esonhugh/MarketplaceServer/mod/backend"
 	distributiondomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/distribution"
-	identitydomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity"
+	identitymodel "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/model"
 	"github.com/Esonhugh/MarketplaceServer/pkg/auth"
 	"github.com/Esonhugh/MarketplaceServer/pkg/gitservice"
 	"github.com/google/uuid"
@@ -30,14 +30,15 @@ import (
 const productionGitPostgresDSNEnvironment = "MARKETPLACE_TEST_POSTGRES_DSN"
 
 type productionSmartHTTPHarness struct {
-	engine   *jinengine.Engine
-	db       *gorm.DB
-	fake     *fakeGit
-	password string
-	readKey  string
-	writeKey string
-	repoID   string
-	userID   string
+	engine     *jinengine.Engine
+	db         *gorm.DB
+	fake       *fakeGit
+	password   string
+	subReadPAT string
+	clonePAT   string
+	writePAT   string
+	repoID     string
+	userID     string
 }
 
 func TestProductionSmartHTTPAuthenticationAndAuthorization(t *testing.T) {
@@ -51,13 +52,13 @@ func TestProductionSmartHTTPAuthenticationAndAuthorization(t *testing.T) {
 		wantStatus  int
 		wantGitCall bool
 	}{
-		{name: "password read", path: "git-upload-pack", username: "alice", credential: harness.password, wantStatus: http.StatusOK, wantGitCall: true},
-		{name: "password write", path: "git-receive-pack", username: "alice", credential: harness.password, wantStatus: http.StatusOK, wantGitCall: true},
-		{name: "read key reads", path: "git-upload-pack", username: "alice", credential: harness.readKey, wantStatus: http.StatusOK, wantGitCall: true},
-		{name: "read key cannot write", path: "git-receive-pack", username: "alice", credential: harness.readKey, wantStatus: http.StatusForbidden},
-		{name: "write key writes", path: "git-receive-pack", username: "alice", credential: harness.writeKey, wantStatus: http.StatusOK, wantGitCall: true},
-		{name: "write key cannot read", path: "git-upload-pack", username: "alice", credential: harness.writeKey, wantStatus: http.StatusForbidden},
-		{name: "invalid password", path: "git-upload-pack", username: "alice", credential: "wrong", wantStatus: http.StatusUnauthorized},
+		{name: "account password denied", path: "git-upload-pack", username: "alice", credential: harness.password, wantStatus: http.StatusUnauthorized},
+		{name: "subscription PAT denied", path: "git-upload-pack", username: "alice", credential: harness.subReadPAT, wantStatus: http.StatusUnauthorized},
+		{name: "clone PAT reads", path: "git-upload-pack", username: "alice", credential: harness.clonePAT, wantStatus: http.StatusOK, wantGitCall: true},
+		{name: "clone PAT cannot write", path: "git-receive-pack", username: "alice", credential: harness.clonePAT, wantStatus: http.StatusUnauthorized},
+		{name: "write PAT writes", path: "git-receive-pack", username: "alice", credential: harness.writePAT, wantStatus: http.StatusOK, wantGitCall: true},
+		{name: "write PAT reads", path: "git-upload-pack", username: "alice", credential: harness.writePAT, wantStatus: http.StatusOK, wantGitCall: true},
+		{name: "invalid PAT", path: "git-upload-pack", username: "alice", credential: "wrong", wantStatus: http.StatusUnauthorized},
 		{name: "anonymous private read", path: "git-upload-pack", wantStatus: http.StatusUnauthorized},
 	}
 	for _, test := range tests {
@@ -87,22 +88,22 @@ func TestProductionSmartHTTPAuthenticationAndAuthorization(t *testing.T) {
 
 	t.Run("revoked key is rejected immediately", func(t *testing.T) {
 		now := time.Now().UTC()
-		if err := harness.db.Model(&identitydomain.PersonalAccessToken{}).Where("name = ?", "read").Update("revoked_at", now).Error; err != nil {
+		if err := harness.db.Model(&identitymodel.PersonalAccessToken{}).Where("name = ?", "clone").Update("revoked_at", now).Error; err != nil {
 			t.Fatal(err)
 		}
-		harness.assertDeniedWithoutGit(t, harness.readKey)
+		harness.assertDeniedWithoutGit(t, harness.clonePAT)
 	})
 
 	t.Run("expired key is rejected", func(t *testing.T) {
-		key := harness.createToken(t, "expired", []auth.Action{auth.ActionRepositoryRead}, timePointer(time.Now().Add(-time.Minute)), nil)
+		key := harness.createToken(t, "expired", identitymodel.TokenPresetGitClone, timePointer(time.Now().Add(-time.Minute)), nil)
 		harness.assertDeniedWithoutGit(t, key)
 	})
 
 	t.Run("disabled user invalidates password and key", func(t *testing.T) {
-		if err := harness.db.Model(&identitydomain.User{}).Where("id = ?", harness.userID).Update("status", identitydomain.UserStatusDisabled).Error; err != nil {
+		if err := harness.db.Model(&identitymodel.User{}).Where("id = ?", harness.userID).Update("status", identitymodel.UserStatusDisabled).Error; err != nil {
 			t.Fatal(err)
 		}
-		for _, credential := range []string{harness.password, harness.writeKey} {
+		for _, credential := range []string{harness.password, harness.writePAT} {
 			harness.assertDeniedWithoutGit(t, credential)
 		}
 	})
@@ -113,7 +114,7 @@ func TestProductionAPIKeyRealGitPushAndClone(t *testing.T) {
 		t.Skip("git executable is unavailable")
 	}
 	harness := newProductionSmartHTTPHarness(t, false)
-	key := harness.createToken(t, "git-client", []auth.Action{auth.ActionRepositoryRead, auth.ActionRepositoryWrite}, nil, nil)
+	key := harness.createToken(t, "git-client", identitymodel.TokenPresetGitWrite, nil, nil)
 	server := httptest.NewServer(harness.engine)
 	defer server.Close()
 
@@ -164,14 +165,15 @@ func newProductionSmartHTTPHarness(t *testing.T, fakeBinary bool) *productionSma
 	t.Helper()
 	db := openProductionGitPostgres(t)
 	pepper := []byte("0123456789abcdef0123456789abcdef")
-	t.Setenv(identitydomain.APIKeyPepperEnvironment, identitydomain.EncodeAPIKeyPepper(pepper))
+	t.Setenv(identitymodel.APIKeyPepperEnvironment, identitymodel.EncodeAPIKeyPepper(pepper))
+	t.Setenv(identitymodel.JWTSecretEnvironment, "production-git-integration-test-jwt-secret")
 	password := "correct horse battery staple"
 	passwordHash, err := auth.HashPassword(password, auth.Argon2idParams{MemoryKiB: 64, Iterations: 1, Parallelism: 1, SaltLength: 8, HashLength: 16})
 	if err != nil {
 		t.Fatal(err)
 	}
 	userID := uuid.NewString()
-	if err := db.Create(&identitydomain.User{ID: userID, Username: "alice", DisplayName: "Alice", Status: identitydomain.UserStatusActive, PasswordHash: passwordHash}).Error; err != nil {
+	if err := db.Create(&identitymodel.User{ID: userID, Username: "alice", DisplayName: "Alice", Status: identitymodel.UserStatusActive, PasswordHash: passwordHash}).Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -198,7 +200,7 @@ func newProductionSmartHTTPHarness(t *testing.T, fakeBinary bool) *productionSma
 	ownerID := userID
 	namespaceID := uuid.NewString()
 	repositoryID := testRepositoryID
-	if err := db.Create(&identitydomain.Namespace{ID: namespaceID, Kind: identitydomain.NamespaceKindUser, Slug: "alice", DisplayName: "Alice", OwnerUserID: &ownerID}).Error; err != nil {
+	if err := db.Create(&identitymodel.Namespace{ID: namespaceID, Kind: identitymodel.NamespaceKindUser, Slug: "alice", DisplayName: "Alice", OwnerUserID: &ownerID}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&distributiondomain.Repository{ID: repositoryID, NamespaceID: namespaceID, Slug: "plugin-one", Visibility: "private", Status: distributiondomain.RepositoryStatusReady, StorageKey: uuid.NewString()}).Error; err != nil {
@@ -216,12 +218,13 @@ func newProductionSmartHTTPHarness(t *testing.T, fakeBinary bool) *productionSma
 	}
 
 	harness := &productionSmartHTTPHarness{engine: engine, db: db, fake: fake, password: password, repoID: repositoryID, userID: userID}
-	harness.readKey = harness.createToken(t, "read", []auth.Action{auth.ActionRepositoryRead}, nil, nil)
-	harness.writeKey = harness.createToken(t, "write", []auth.Action{auth.ActionRepositoryWrite}, nil, nil)
+	harness.subReadPAT = harness.createToken(t, "subscription", identitymodel.TokenPresetSubscriptionRead, nil, nil)
+	harness.clonePAT = harness.createToken(t, "clone", identitymodel.TokenPresetGitClone, nil, nil)
+	harness.writePAT = harness.createToken(t, "write", identitymodel.TokenPresetGitWrite, nil, nil)
 	return harness
 }
 
-func (harness *productionSmartHTTPHarness) createToken(t *testing.T, name string, scopes []auth.Action, expiresAt, revokedAt *time.Time) string {
+func (harness *productionSmartHTTPHarness) createToken(t *testing.T, name, preset string, expiresAt, revokedAt *time.Time) string {
 	t.Helper()
 	plaintext, err := auth.GenerateAPIKey()
 	if err != nil {
@@ -233,14 +236,9 @@ func (harness *productionSmartHTTPHarness) createToken(t *testing.T, name string
 		t.Fatal(err)
 	}
 	tokenID := uuid.NewString()
-	token := identitydomain.PersonalAccessToken{ID: tokenID, UserID: harness.userID, Name: name, SecretHMAC: index, ExpiresAt: expiresAt, RevokedAt: revokedAt}
+	token := identitymodel.PersonalAccessToken{ID: tokenID, UserID: harness.userID, Name: name, Preset: preset, SecretPlaintext: plaintext, SecretHMAC: index, ExpiresAt: expiresAt, RevokedAt: revokedAt}
 	if err := harness.db.Create(&token).Error; err != nil {
 		t.Fatal(err)
-	}
-	for _, action := range scopes {
-		if err := harness.db.Create(&identitydomain.PersonalAccessTokenScope{TokenID: tokenID, Action: action}).Error; err != nil {
-			t.Fatal(err)
-		}
 	}
 	return plaintext
 }

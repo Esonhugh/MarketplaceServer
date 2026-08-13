@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	identitydomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity"
+	identitymodel "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/model"
 	"github.com/google/uuid"
 )
 
@@ -12,7 +12,7 @@ var ErrMarketplacePublicKeyConflict = errors.New("marketplace public key already
 
 type PublicationInput struct {
 	Template  MarketplaceTemplate
-	Namespace identitydomain.Namespace
+	Namespace identitymodel.Namespace
 	Versions  []PublicationVersion
 }
 

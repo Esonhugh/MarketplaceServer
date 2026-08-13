@@ -1,4 +1,4 @@
-package identity
+package dao
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/model"
 	"github.com/Esonhugh/MarketplaceServer/pkg/auth"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -26,18 +27,18 @@ type PasswordHasher func(password string, params auth.Argon2idParams) (string, e
 
 type Bootstrapper struct {
 	db     *gorm.DB
-	env    Environment
+	env    model.Environment
 	hash   PasswordHasher
 	params auth.Argon2idParams
 	newID  func() string
 }
 
-func NewBootstrapper(db *gorm.DB, environment Environment) (*Bootstrapper, error) {
+func NewBootstrapper(db *gorm.DB, environment model.Environment) (*Bootstrapper, error) {
 	if db == nil {
 		return nil, errors.New("identity bootstrap requires database")
 	}
 	if environment == nil {
-		environment = OSEnvironment{}
+		environment = model.OSEnvironment{}
 	}
 	return &Bootstrapper{
 		db:     db,
@@ -49,8 +50,8 @@ func NewBootstrapper(db *gorm.DB, environment Environment) (*Bootstrapper, error
 }
 
 func (bootstrapper *Bootstrapper) Bootstrap(ctx context.Context) error {
-	if err := validateAPIKeyPepper(bootstrapper.env); err != nil {
-		return err
+	if _, err := model.APIKeyPepper(bootstrapper.env); err != nil {
+		return fmt.Errorf("configure %s: %w", model.APIKeyPepperEnvironment, err)
 	}
 	runTransaction := func(db *gorm.DB) error {
 		return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -62,13 +63,13 @@ func (bootstrapper *Bootstrapper) Bootstrap(ctx context.Context) error {
 			}
 
 			var count int64
-			if err := tx.Model(&User{}).Count(&count).Error; err != nil {
+			if err := tx.Model(&model.User{}).Count(&count).Error; err != nil {
 				return fmt.Errorf("count bootstrap users: %w", err)
 			}
 			if count > 0 {
 				return nil
 			}
-			password, ok := bootstrapper.env.LookupEnv(BootstrapAdminPasswordEnvironment)
+			password, ok := bootstrapper.env.LookupEnv(model.BootstrapAdminPasswordEnvironment)
 			if !ok || password == "" {
 				return ErrBootstrapAdminPasswordRequired
 			}
@@ -80,21 +81,21 @@ func (bootstrapper *Bootstrapper) Bootstrap(ctx context.Context) error {
 				return fmt.Errorf("hash bootstrap administrator password: %w", err)
 			}
 			userID := bootstrapper.newID()
-			user := User{
+			user := model.User{
 				ID: userID, Username: BootstrapAdminUsername, DisplayName: "Administrator",
-				Status: UserStatusActive, PasswordHash: passwordHash,
+				Status: model.UserStatusActive, PasswordHash: passwordHash,
 			}
 			if err := tx.Create(&user).Error; err != nil {
 				return fmt.Errorf("create bootstrap administrator: %w", err)
 			}
-			namespace := Namespace{
-				ID: bootstrapper.newID(), Kind: NamespaceKindUser, Slug: BootstrapAdminUsername,
+			namespace := model.Namespace{
+				ID: bootstrapper.newID(), Kind: model.NamespaceKindUser, Slug: BootstrapAdminUsername,
 				DisplayName: user.DisplayName, OwnerUserID: &userID,
 			}
 			if err := tx.Create(&namespace).Error; err != nil {
 				return fmt.Errorf("create bootstrap administrator namespace: %w", err)
 			}
-			membership := UserGroupMembership{UserID: userID, GroupID: AdminSystemGroupID}
+			membership := model.UserGroupMembership{UserID: userID, GroupID: model.AdminSystemGroupID}
 			if err := tx.Create(&membership).Error; err != nil {
 				return fmt.Errorf("create bootstrap administrator membership: %w", err)
 			}
@@ -121,20 +122,20 @@ func ensureSystemGroups(tx *gorm.DB) error {
 	if tx == nil {
 		return errors.New("identity: ensure system groups requires database")
 	}
-	groups := []SystemGroup{
-		{ID: AdminSystemGroupID, Name: AdminSystemGroupName, Description: "Global system administrators"},
-		{ID: DefaultSystemGroupID, Name: DefaultSystemGroupName, Description: "All active users"},
+	groups := []model.SystemGroup{
+		{ID: model.AdminSystemGroupID, Name: model.AdminSystemGroupName, Description: "Global system administrators"},
+		{ID: model.DefaultSystemGroupID, Name: model.DefaultSystemGroupName, Description: "All active users"},
 	}
 	for i := range groups {
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&groups[i]).Error; err != nil {
 			return fmt.Errorf("ensure system group %s: %w", groups[i].Name, err)
 		}
 	}
-	var persisted []SystemGroup
-	if err := tx.Where("id IN ?", []string{AdminSystemGroupID, DefaultSystemGroupID}).Find(&persisted).Error; err != nil {
+	var persisted []model.SystemGroup
+	if err := tx.Where("id IN ?", []string{model.AdminSystemGroupID, model.DefaultSystemGroupID}).Find(&persisted).Error; err != nil {
 		return fmt.Errorf("verify system groups: %w", err)
 	}
-	byID := make(map[string]SystemGroup, len(persisted))
+	byID := make(map[string]model.SystemGroup, len(persisted))
 	for _, group := range persisted {
 		byID[group.ID] = group
 	}
