@@ -13,8 +13,9 @@
 
 请求平面目录固定使用 `management/`、`git/` 或 `distribution/`。同一系统涉及多个平面时分别维护各自的 `api-contract.md`，禁止用一个无分类的 API 文档混合协议。
 
-Management API 的全部精确 HTTP wire contract 以 [`api/openapi/management-v1-design.yaml`](../../../api/openapi/management-v1-design.yaml) 为权威；系统 Markdown 只记录 rationale、ownership 和实现边界。实现并验证后的 wire 才能进入 deployed OpenAPI。
+Proposed Management API 的精确 HTTP wire contract 以 [`api/openapi/management-v1-design.yaml`](../../../api/openapi/management-v1-design.yaml) 为权威；已实现并验证的 deployed wire 以 [`api/openapi/management-v1.yaml`](../../../api/openapi/management-v1.yaml) 为权威。系统 Markdown 只记录 rationale、ownership 和实现边界。
 
 ## 已登记系统
 
 1. [`01-identity-authentication`](01-identity-authentication/)：账号登录、stateless frontend JWT 与用户 PAT 生命周期。
+2. [`02-plugin-lifecycle`](02-plugin-lifecycle/)：Plugin 与 hidden Repository shared-ID aggregate、可恢复 lifecycle、tag-as-Version 与 durable protected receive coordination（design `approved`，implementation not approved）。

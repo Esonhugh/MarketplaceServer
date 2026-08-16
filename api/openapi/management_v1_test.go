@@ -14,11 +14,21 @@ import (
 )
 
 const (
-	loginPath  = "/api/v1/auth/login"
-	healthPath = "/api/v1/health"
-	tokensPath = "/api/v1/me/tokens"
-	tokenPath  = "/api/v1/me/tokens/{tokenId}"
-	revealPath = "/api/v1/me/tokens/{tokenId}/reveal"
+	loginPath          = "/api/v1/auth/login"
+	healthPath         = "/api/v1/health"
+	tokensPath         = "/api/v1/me/tokens"
+	tokenPath          = "/api/v1/me/tokens/{tokenId}"
+	revealPath         = "/api/v1/me/tokens/{tokenId}/reveal"
+	pluginsPath        = "/api/v1/namespaces/{namespace}/plugins"
+	pluginPath         = "/api/v1/namespaces/{namespace}/plugins/{plugin}"
+	pluginVersionsPath = "/api/v1/namespaces/{namespace}/plugins/{plugin}/versions"
+	publishVersionPath = "/api/v1/namespaces/{namespace}/plugins/{plugin}/versions:publish"
+	pluginVersionPath  = "/api/v1/namespaces/{namespace}/plugins/{plugin}/versions/{tag}"
+	archivePluginPath  = "/api/v1/namespaces/{namespace}/plugins/{plugin}:archive"
+	restorePluginPath  = "/api/v1/namespaces/{namespace}/plugins/{plugin}:restore"
+	visibilityPath     = "/api/v1/namespaces/{namespace}/plugins/{plugin}:set-visibility"
+	defaultVersionPath = "/api/v1/namespaces/{namespace}/plugins/{plugin}/versions/{tag}:set-default"
+	clearDefaultPath   = "/api/v1/namespaces/{namespace}/plugins/{plugin}/default-version"
 )
 
 func TestManagementV1ParsesAndResolvesLocalReferences(t *testing.T) {
@@ -162,6 +172,69 @@ func TestManagementV1DesignParsesAndResolvesLocalReferences(t *testing.T) {
 func TestManagementV1DesignCreatePATIncludesBadRequest(t *testing.T) {
 	document := loadDocument(t, "management-v1-design.yaml")
 	assertStatuses(t, operation(t, document, tokensPath, "post"), "201", "400", "401", "403", "422", "500")
+}
+
+func TestManagementV1DesignPluginAndVersionSemantics(t *testing.T) {
+	document := loadDocument(t, "management-v1-design.yaml")
+
+	assertBearerOnly(t, operation(t, document, pluginsPath, "get"))
+	assertBearerOnly(t, operation(t, document, pluginsPath, "post"))
+	assertStatuses(t, operation(t, document, pluginsPath, "get"), "200", "401", "403", "422", "500")
+	assertStatuses(t, operation(t, document, pluginsPath, "post"), "201", "400", "401", "403", "409", "422", "500")
+
+	assertSecurity(t, operation(t, document, pluginPath, "get"), []any{map[string]any{}, map[string]any{"BearerJWT": []any{}}})
+	assertStatuses(t, operation(t, document, pluginPath, "get"), "200", "401", "403", "404", "500")
+	for _, path := range []string{archivePluginPath, restorePluginPath} {
+		assertBearerOnly(t, operation(t, document, path, "post"))
+		assertStatuses(t, operation(t, document, path, "post"), "204", "401", "403", "404", "409", "500")
+		assertNoResponseContent(t, operation(t, document, path, "post"), "204")
+	}
+	assertBearerOnly(t, operation(t, document, visibilityPath, "post"))
+	assertStatuses(t, operation(t, document, visibilityPath, "post"), "204", "400", "401", "403", "404", "409", "422", "500")
+	assertNoResponseContent(t, operation(t, document, visibilityPath, "post"), "204")
+
+	assertBearerOnly(t, operation(t, document, pluginVersionsPath, "get"))
+	assertStatuses(t, operation(t, document, pluginVersionsPath, "get"), "200", "401", "403", "404", "422", "500")
+	assertBearerOnly(t, operation(t, document, publishVersionPath, "post"))
+	assertStatuses(t, operation(t, document, publishVersionPath, "post"), "201", "400", "401", "403", "404", "409", "422", "500")
+	assertSecurity(t, operation(t, document, pluginVersionPath, "get"), []any{map[string]any{}, map[string]any{"BearerJWT": []any{}}})
+	assertStatuses(t, operation(t, document, pluginVersionPath, "get"), "200", "401", "403", "404", "410", "500")
+	assertBearerOnly(t, operation(t, document, defaultVersionPath, "post"))
+	assertStatuses(t, operation(t, document, defaultVersionPath, "post"), "204", "401", "403", "404", "409", "500")
+	assertNoResponseContent(t, operation(t, document, defaultVersionPath, "post"), "204")
+	assertBearerOnly(t, operation(t, document, clearDefaultPath, "delete"))
+	assertStatuses(t, operation(t, document, clearDefaultPath, "delete"), "204", "401", "403", "404", "409", "500")
+	assertNoResponseContent(t, operation(t, document, clearDefaultPath, "delete"), "204")
+
+	schemas := mapValue(t, mapValue(t, document, "components"), "schemas")
+	pluginStatus := schema(t, schemas, "PluginStatus")
+	if got := stringSlice(t, pluginStatus["enum"]); !reflect.DeepEqual(got, []string{"draft", "active", "archived"}) {
+		t.Fatalf("PluginStatus enum = %v", got)
+	}
+	plugin := schema(t, schemas, "Plugin")
+	assertRequired(t, plugin, "namespace", "name", "status", "visibility", "repositoryStatus", "cloneUrl", "defaultVersion", "createdAt", "updatedAt")
+	pluginProperties := mapValue(t, plugin, "properties")
+	for _, forbidden := range []string{"id", "pluginId", "repositoryId", "storagePath", "storageKey"} {
+		if _, ok := pluginProperties[forbidden]; ok {
+			t.Fatalf("Plugin must not expose %s", forbidden)
+		}
+	}
+	if got := stringSlice(t, schema(t, schemas, "RepositoryStatus")["enum"]); !reflect.DeepEqual(got, []string{"ready", "readOnly", "error"}) {
+		t.Fatalf("RepositoryStatus enum = %v", got)
+	}
+
+	versionStatus := schema(t, schemas, "PluginVersionStatus")
+	if got := stringValue(t, versionStatus, "const"); got != "available" {
+		t.Fatalf("PluginVersionStatus const = %q", got)
+	}
+	version := schema(t, schemas, "PluginVersion")
+	assertRequired(t, version, "tag", "status", "commitSha", "publishedAt", "updatedAt")
+	versionProperties := mapValue(t, version, "properties")
+	for _, forbidden := range []string{"id", "pluginId", "version"} {
+		if _, ok := versionProperties[forbidden]; ok {
+			t.Fatalf("PluginVersion must not expose %s", forbidden)
+		}
+	}
 }
 
 func loadDocument(t *testing.T, name string) map[string]any {
