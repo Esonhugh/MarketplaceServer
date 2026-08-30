@@ -12,6 +12,7 @@ import (
 
 	identitydao "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/dao"
 	identitymodel "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/model"
+	plugindomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/plugin"
 	"github.com/Esonhugh/MarketplaceServer/pkg/distributionservice"
 	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
@@ -48,6 +49,9 @@ func TestPostgresDistributionConstraints(t *testing.T) {
 	if err := identitydao.Migrate(db); err != nil {
 		t.Fatalf("migrate identity dependencies: %v", err)
 	}
+	if err := plugindomain.Migrate(db); err != nil {
+		t.Fatalf("migrate Plugin lifecycle dependencies: %v", err)
+	}
 	if err := Migrate(db); err != nil {
 		t.Fatalf("Migrate() error = %v", err)
 	}
@@ -55,7 +59,7 @@ func TestPostgresDistributionConstraints(t *testing.T) {
 	fixture := insertConstraintFixture(t, db)
 	first := PluginDistribution{
 		ID: uuid.NewString(), TemplateID: fixture.templateID, PluginID: fixture.pluginID,
-		PluginVersionID: fixture.versionID, RepositoryID: fixture.repositoryID,
+		PluginTag: "v1.0.0", RepositoryID: fixture.repositoryID,
 		TagName: "v1.0.0", SourceTagType: "lightweight",
 		SourceCommitSHA: strings.Repeat("1", 40), SourceTreeSHA: strings.Repeat("2", 40),
 		DistributionSHA: strings.Repeat("3", 40), StorageKey: uuid.NewString(),
@@ -110,8 +114,8 @@ func TestPostgresDistributionConstraints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repository.FindActivePlugin(context.Background(), uuid.MustParse(first.ID)); err != nil {
-		t.Fatalf("public active Plugin distribution was unavailable: %v", err)
+	if _, err := repository.FindActivePlugin(context.Background(), uuid.MustParse(first.ID)); !errors.Is(err, distributionservice.ErrUnavailable) {
+		t.Fatalf("legacy Plugin distribution without a revision projection pointer error = %v, want unavailable", err)
 	}
 	publicKey, err := distributionservice.ParseMarketplacePublicKey(distributionA.PublicKey)
 	if err != nil {
@@ -155,15 +159,18 @@ type constraintFixture struct {
 func insertConstraintFixture(t *testing.T, db *gorm.DB) constraintFixture {
 	t.Helper()
 	fixture := constraintFixture{
-		namespaceID: uuid.NewString(), repositoryID: uuid.NewString(), pluginID: uuid.NewString(),
+		namespaceID: uuid.NewString(), pluginID: uuid.NewString(),
 		versionID: uuid.NewString(), templateID: uuid.NewString(), revisionID: uuid.NewString(),
 	}
+	fixture.repositoryID = fixture.pluginID
 	now := time.Now().UTC()
+	commitSHA := strings.Repeat("a", 40)
+	manifestDigest := strings.Repeat("b", 64)
 	values := []any{
 		&identitymodel.Namespace{ID: fixture.namespaceID, Kind: identitymodel.NamespaceKindTeam, Slug: "security", DisplayName: "Security"},
-		&Repository{ID: fixture.repositoryID, NamespaceID: fixture.namespaceID, Slug: "scanner", Visibility: "public", Status: RepositoryStatusReady, StorageKey: uuid.NewString()},
-		&Plugin{ID: fixture.pluginID, NamespaceID: fixture.namespaceID, RepositoryID: fixture.repositoryID, Slug: "scanner", Name: "Scanner", Visibility: "public", Status: StatusActive},
-		&PluginVersion{ID: fixture.versionID, PluginID: fixture.pluginID, Version: "1.0.0", TagName: "v1.0.0", CommitSHA: strings.Repeat("a", 40), ManifestDigest: strings.Repeat("b", 64), ManifestSnapshot: []byte(`{}`), Status: StatusActive, PublishedAt: now},
+		&Plugin{ID: fixture.pluginID, NamespaceID: fixture.namespaceID, Slug: "scanner", Visibility: "public", Status: plugindomain.PluginStatusActive},
+		&Repository{ID: fixture.repositoryID, Status: RepositoryStatusReady, StorageKey: uuid.NewString()},
+		&PluginVersion{ID: fixture.versionID, PluginID: fixture.pluginID, Tag: "v1.0.0", CommitSHA: &commitSHA, ManifestDigest: &manifestDigest, ManifestSnapshot: []byte(`{}`), Status: plugindomain.VersionStatusAvailable, PublishedAt: now},
 		&MarketplaceTemplate{ID: fixture.templateID, NamespaceID: fixture.namespaceID, Slug: "web", Name: "Web", Visibility: "public", Status: StatusActive},
 		&MarketplaceRevision{ID: fixture.revisionID, TemplateID: fixture.templateID, Revision: 1, ContentJSON: []byte(`{"name":"web"}`), ContentDigest: strings.Repeat("6", 64), Status: StatusActive, PublishedAt: now},
 	}

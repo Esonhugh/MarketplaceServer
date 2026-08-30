@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	identitymodel "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/model"
+	plugindomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/plugin"
 	"gorm.io/gorm"
 )
 
@@ -53,11 +54,12 @@ func (repository *GORMUserMarketplaceRepository) FindUserMarketplace(ctx context
 			Table("plugins AS p").
 			Select(`p.namespace_id, n.slug AS namespace_slug,
 				p.id AS plugin_id, p.slug AS plugin_slug, p.description AS plugin_description, p.status AS plugin_status,
-				r.id AS repository_id, r.slug AS repository_slug, r.status AS repository_status,
-				v.id AS version_id, v.version, v.status AS version_status, v.tag_name, v.commit_sha`).
+				r.id AS repository_id, p.slug AS repository_slug, r.status AS repository_status,
+				v.id AS version_id, v.tag AS version, v.status AS version_status, v.tag AS tag_name, v.commit_sha`).
 			Joins("JOIN namespaces AS n ON n.id = p.namespace_id").
-			Joins("JOIN repositories AS r ON r.id = p.repository_id AND r.namespace_id = p.namespace_id").
+			Joins("JOIN repositories AS r ON r.id = p.id").
 			Joins("JOIN plugin_versions AS v ON v.plugin_id = p.id").
+			Where("p.namespace_id = ? AND n.id = p.namespace_id AND v.status = ?", namespace.ID, plugindomain.VersionStatusAvailable).
 			Find(&candidates).Error; err != nil {
 			return fmt.Errorf("find user marketplace plugins: %w", err)
 		}

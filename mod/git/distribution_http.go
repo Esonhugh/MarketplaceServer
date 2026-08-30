@@ -1,6 +1,7 @@
 package git
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -39,9 +40,9 @@ func (m *Mod) handleDistributionInfoRefs(c *jinengine.Context, kind gitservice.P
 		writePlain(c, http.StatusNotFound, "distribution not found\n")
 		return
 	}
-	projection, ok := m.resolveDistribution(c, kind)
-	if !ok {
-		writePlain(c, http.StatusNotFound, "distribution not found\n")
+	projection, status := m.resolveDistribution(c, kind)
+	if status != http.StatusOK {
+		writePlain(c, status, "distribution not found\n")
 		return
 	}
 	setGitHeaders(c, "application/x-git-upload-pack-advertisement")
@@ -54,9 +55,9 @@ func (m *Mod) handleDistributionUploadPack(c *jinengine.Context, kind gitservice
 	if !contentLengthWithinLimit(c, m.config.maxRequestBytes) {
 		return
 	}
-	projection, ok := m.resolveDistribution(c, kind)
-	if !ok {
-		writePlain(c, http.StatusNotFound, "distribution not found\n")
+	projection, status := m.resolveDistribution(c, kind)
+	if status != http.StatusOK {
+		writePlain(c, status, "distribution not found\n")
 		return
 	}
 	setGitHeaders(c, "application/x-git-upload-pack-result")
@@ -69,10 +70,10 @@ func (m *Mod) handleDistributionUploadPack(c *jinengine.Context, kind gitservice
 	}
 }
 
-func (m *Mod) resolveDistribution(c *jinengine.Context, kind gitservice.ProjectionKind) (gitservice.ImmutableProjection, bool) {
+func (m *Mod) resolveDistribution(c *jinengine.Context, kind gitservice.ProjectionKind) (gitservice.ImmutableProjection, int) {
 	raw := c.Params.ByName("distribution")
 	if !strings.HasSuffix(raw, ".git") {
-		return gitservice.ImmutableProjection{}, false
+		return gitservice.ImmutableProjection{}, http.StatusNotFound
 	}
 	raw = strings.TrimSuffix(raw, ".git")
 	var projection gitservice.ImmutableProjection
@@ -80,28 +81,31 @@ func (m *Mod) resolveDistribution(c *jinengine.Context, kind gitservice.Projecti
 	case gitservice.ProjectionKindMarketplace:
 		publicKey, err := distributionservice.ParseMarketplacePublicKey(raw)
 		if err != nil {
-			return gitservice.ImmutableProjection{}, false
+			return gitservice.ImmutableProjection{}, http.StatusNotFound
 		}
 		grant, err := m.distributionResolver.ResolveMarketplace(c.Request.Context(), publicKey)
 		if err != nil {
-			return gitservice.ImmutableProjection{}, false
+			return gitservice.ImmutableProjection{}, http.StatusNotFound
 		}
 		projection = grant.Projection
 	case gitservice.ProjectionKindPlugin:
 		id, err := uuid.Parse(raw)
 		if err != nil || id.String() != raw {
-			return gitservice.ImmutableProjection{}, false
+			return gitservice.ImmutableProjection{}, http.StatusNotFound
 		}
 		grant, err := m.distributionResolver.ResolvePlugin(c.Request.Context(), id)
+		if errors.Is(err, distributionservice.ErrGone) {
+			return gitservice.ImmutableProjection{}, http.StatusGone
+		}
 		if err != nil {
-			return gitservice.ImmutableProjection{}, false
+			return gitservice.ImmutableProjection{}, http.StatusNotFound
 		}
 		projection = grant.Projection
 	default:
-		return gitservice.ImmutableProjection{}, false
+		return gitservice.ImmutableProjection{}, http.StatusNotFound
 	}
 	if projection.Kind != kind {
-		return gitservice.ImmutableProjection{}, false
+		return gitservice.ImmutableProjection{}, http.StatusNotFound
 	}
-	return projection, true
+	return projection, http.StatusOK
 }

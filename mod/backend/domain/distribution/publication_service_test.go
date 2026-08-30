@@ -8,6 +8,7 @@ import (
 	"time"
 
 	identitymodel "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/model"
+	plugindomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/plugin"
 	"github.com/Esonhugh/MarketplaceServer/pkg/distributionservice"
 	"github.com/Esonhugh/MarketplaceServer/pkg/gitservice"
 	"github.com/google/uuid"
@@ -211,15 +212,15 @@ func newPublicationFixture() publicationFixture {
 	templateID := uuid.New()
 	versionID := uuid.New()
 	pluginID := uuid.New()
-	repositoryID := uuid.New()
+	repositoryID := pluginID
 	pluginProjectionID := uuid.New()
 	repository := &fakePublicationRepository{
 		input: PublicationInput{
 			Template:  MarketplaceTemplate{ID: templateID.String(), Slug: "ctf-web", Name: "CTF Web"},
 			Namespace: identitymodel.Namespace{ID: uuid.NewString(), Kind: identitymodel.NamespaceKindTeam, Slug: "security", DisplayName: "Security Team"},
 			Versions: []PublicationVersion{{
-				Version:    PluginVersion{ID: versionID.String(), PluginID: pluginID.String(), Version: "1.0.0", TagName: "v1.0.0"},
-				Plugin:     Plugin{ID: pluginID.String(), RepositoryID: repositoryID.String(), Slug: "java-scanner", Description: "Java scanner"},
+				Version:    PluginVersion{ID: versionID.String(), PluginID: pluginID.String(), Tag: "v1.0.0"},
+				Plugin:     Plugin{ID: pluginID.String(), Slug: "java-scanner", Description: "Java scanner"},
 				Repository: Repository{ID: repositoryID.String()},
 			}},
 		},
@@ -249,7 +250,7 @@ type fakePublicationRepository struct {
 func (repository *fakePublicationRepository) LoadPublicationInput(context.Context, uuid.UUID, []uuid.UUID) (PublicationInput, error) {
 	return repository.input, nil
 }
-func (repository *fakePublicationRepository) FindPluginDistribution(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (PluginDistribution, error) {
+func (repository *fakePublicationRepository) FindPluginDistribution(context.Context, uuid.UUID, uuid.UUID, string) (PluginDistribution, error) {
 	if repository.pluginDistribution == nil {
 		return PluginDistribution{}, distributionservice.ErrNotFound
 	}
@@ -282,7 +283,7 @@ func (repository *fakePublicationRepository) CreateMarketplaceDistribution(_ con
 	repository.marketplaceDistribution = &copy
 	return nil
 }
-func (*fakePublicationRepository) CreateMarketplaceRevision(context.Context, *MarketplaceRevision, []MarketplaceRevisionItem, *MarketplaceDistributionProjection) error {
+func (*fakePublicationRepository) CreateMarketplaceRevision(context.Context, *MarketplaceRevision, []MarketplaceRevisionItem, *MarketplaceDistributionProjection, []plugindomain.ProjectionArtifact, []plugindomain.RevisionProjectionPointer) error {
 	return nil
 }
 func (repository *fakePublicationRepository) SwitchMarketplacePointers(_ context.Context, _ uuid.UUID, revisionID, _ uuid.UUID, projectionID uuid.UUID) error {

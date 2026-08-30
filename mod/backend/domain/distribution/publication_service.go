@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	plugindomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/plugin"
 	"github.com/Esonhugh/MarketplaceServer/pkg/distributionservice"
 	"github.com/Esonhugh/MarketplaceServer/pkg/gitservice"
 	"github.com/Esonhugh/MarketplaceServer/pkg/marketplacejson"
@@ -59,7 +60,7 @@ func (service *PublicationService) Publish(ctx context.Context, command PublishC
 	}
 	sort.Slice(input.Versions, func(i, j int) bool {
 		if input.Versions[i].Plugin.Slug == input.Versions[j].Plugin.Slug {
-			return input.Versions[i].Version.Version < input.Versions[j].Version.Version
+			return strings.TrimPrefix(input.Versions[i].Version.Tag, "v") < strings.TrimPrefix(input.Versions[j].Version.Tag, "v")
 		}
 		return input.Versions[i].Plugin.Slug < input.Versions[j].Plugin.Slug
 	})
@@ -69,7 +70,7 @@ func (service *PublicationService) Publish(ctx context.Context, command PublishC
 	plugins := make([]marketplacejson.Plugin, 0, len(input.Versions))
 	items := make([]MarketplaceRevisionItem, 0, len(input.Versions))
 	for position, selected := range input.Versions {
-		distribution, findErr := service.repository.FindPluginDistribution(ctx, command.TemplateID, mustUUID(selected.Plugin.ID), mustUUID(selected.Version.ID))
+		distribution, findErr := service.repository.FindPluginDistribution(ctx, command.TemplateID, mustUUID(selected.Plugin.ID), selected.Version.Tag)
 		if findErr != nil && !errors.Is(findErr, distributionservice.ErrNotFound) && !errors.Is(findErr, gorm.ErrRecordNotFound) {
 			return PublishResult{}, findErr
 		}
@@ -77,7 +78,7 @@ func (service *PublicationService) Publish(ctx context.Context, command PublishC
 			projectionID := uuid.New()
 			built, buildErr := service.builder.BuildPluginProjection(ctx, gitservice.BuildPluginProjectionCommand{
 				ProjectionID: projectionID, RepositoryID: selected.Repository.ID,
-				TagName: selected.Version.TagName, PublishedAt: command.PublishedAt,
+				TagName: selected.Version.Tag, PublishedAt: command.PublishedAt,
 			})
 			if buildErr != nil {
 				service.compensate(ctx, builtPluginProjections)
@@ -86,7 +87,7 @@ func (service *PublicationService) Publish(ctx context.Context, command PublishC
 			builtPluginProjections = append(builtPluginProjections, built.Projection)
 			distribution = PluginDistribution{
 				ID: projectionID.String(), TemplateID: command.TemplateID.String(), PluginID: selected.Plugin.ID,
-				PluginVersionID: selected.Version.ID, RepositoryID: selected.Repository.ID, TagName: built.TagName,
+				PluginTag: selected.Version.Tag, RepositoryID: selected.Repository.ID, TagName: built.TagName,
 				SourceTagType: string(built.SourceTagType), SourceTagObjectID: built.SourceTagObjectID,
 				SourceCommitSHA: built.SourceCommitSHA, SourceTreeSHA: built.SourceTreeSHA,
 				DistributionSHA: built.DistributionSHA, StorageKey: built.Projection.StorageKey,
@@ -97,11 +98,11 @@ func (service *PublicationService) Publish(ctx context.Context, command PublishC
 		distributionID := mustUUID(distribution.ID)
 		sourceURL := origin + "/distribution/plugins/" + distributionID.String() + ".git"
 		plugins = append(plugins, marketplacejson.Plugin{
-			Name: selected.Plugin.Slug, Description: selected.Plugin.Description, Version: selected.Version.Version,
+			Name: selected.Plugin.Slug, Description: selected.Plugin.Description, Version: strings.TrimPrefix(selected.Version.Tag, "v"),
 			Source: marketplacejson.URLSource{Source: marketplacejson.URLSourceType, URL: sourceURL, Ref: distribution.TagName, SHA: distribution.DistributionSHA},
 		})
 		items = append(items, MarketplaceRevisionItem{
-			ID: uuid.NewString(), PluginID: selected.Plugin.ID, PluginVersionID: selected.Version.ID,
+			ID: uuid.NewString(), PluginID: selected.Plugin.ID, PluginTag: selected.Version.Tag,
 			PluginDistributionID: distribution.ID, SourceURL: sourceURL,
 			DistributionSHA: distribution.DistributionSHA, Position: position,
 		})
@@ -149,8 +150,39 @@ func (service *PublicationService) Publish(ctx context.Context, command PublishC
 		return PublishResult{}, err
 	}
 	allBuilt := append(builtPluginProjections, marketplaceProjection.Projection)
+	artifacts := make([]plugindomain.ProjectionArtifact, 0, len(items))
+	pointers := make([]plugindomain.RevisionProjectionPointer, 0, len(items))
 	for i := range items {
 		items[i].RevisionID = revisionID.String()
+		distributionID := items[i].PluginDistributionID
+		var pluginDistribution PluginDistribution
+		for _, candidate := range newPluginDistributions {
+			if candidate.ID == distributionID {
+				pluginDistribution = candidate
+				break
+			}
+		}
+		if pluginDistribution.ID == "" {
+			pluginDistribution, err = service.repository.FindPluginDistribution(ctx, command.TemplateID, mustUUID(items[i].PluginID), items[i].PluginTag)
+			if err != nil {
+				service.compensate(ctx, allBuilt)
+				return PublishResult{}, err
+			}
+		}
+		artifactID := uuid.NewString()
+		revisionIDString := revisionID.String()
+		artifacts = append(artifacts, plugindomain.ProjectionArtifact{
+			ID: artifactID, Kind: plugindomain.ArtifactKindPlugin, PluginID: items[i].PluginID, Tag: items[i].PluginTag,
+			SourceObjectID: pluginDistribution.SourceTagObjectID, SourceCommitSHA: pluginDistribution.SourceCommitSHA,
+			SourceTreeSHA: pluginDistribution.SourceTreeSHA, RevisionID: &revisionIDString,
+			ContentDigest: pluginDistribution.ContentDigest, DistributionSHA: pluginDistribution.DistributionSHA,
+			StorageKey: pluginDistribution.StorageKey, State: plugindomain.ArtifactStateReady,
+			CreatedAt: command.PublishedAt.UTC(), UpdatedAt: command.PublishedAt.UTC(), ReadyAt: timePointer(command.PublishedAt.UTC()),
+		})
+		pointers = append(pointers, plugindomain.RevisionProjectionPointer{
+			ID: uuid.NewString(), RevisionID: revisionIDString, PluginID: items[i].PluginID, Tag: items[i].PluginTag,
+			ArtifactID: &artifactID, Generation: 1, Available: true, UpdatedAt: command.PublishedAt.UTC(),
+		})
 	}
 	revision := MarketplaceRevision{
 		ID: revisionID.String(), TemplateID: command.TemplateID.String(), Revision: revisionNumber,
@@ -171,7 +203,7 @@ func (service *PublicationService) Publish(ctx context.Context, command PublishC
 				return err
 			}
 		}
-		if err := publicationStore.CreateMarketplaceRevision(ctx, &revision, items, &projection); err != nil {
+		if err := publicationStore.CreateMarketplaceRevision(ctx, &revision, items, &projection, artifacts, pointers); err != nil {
 			return err
 		}
 		return publicationStore.SwitchMarketplacePointers(ctx, command.TemplateID, revisionID, mustUUID(distribution.ID), projectionID)
@@ -239,6 +271,10 @@ func validateOrigin(raw string) (string, error) {
 
 func mustUUID(raw string) uuid.UUID {
 	return uuid.MustParse(raw)
+}
+
+func timePointer(value time.Time) *time.Time {
+	return &value
 }
 
 func (service *PublicationService) compensate(ctx context.Context, projections []gitservice.ImmutableProjection) {

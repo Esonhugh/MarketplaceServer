@@ -183,7 +183,7 @@ func (stub *countingAuthorizer) Authorize(_ context.Context, _ auth.Principal, _
 
 func handlerMarketplacePrincipal(t *testing.T, id, username string) auth.Principal {
 	t.Helper()
-	principal, err := auth.NewUserPrincipal(id, username, auth.CredentialPAT, auth.RestrictedScopes(auth.ActionMarketplaceRead, auth.ActionPluginRead, auth.ActionRepositoryRead))
+	principal, err := auth.NewUserPrincipal(id, username, auth.CredentialPAT, auth.RestrictedScopes(auth.ActionMarketplaceRead, auth.ActionPluginRead))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	plugindomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/plugin"
 	"github.com/Esonhugh/MarketplaceServer/pkg/auth"
 	"github.com/Esonhugh/MarketplaceServer/pkg/marketplacejson"
 	"github.com/Masterminds/semver"
@@ -87,8 +88,7 @@ func (service *UserMarketplaceService) plugins(ctx context.Context, principal au
 	}
 	plugins := make([]marketplacejson.Plugin, 0, len(best))
 	for _, selected := range best {
-		if service.authorizer.Authorize(ctx, principal, auth.ActionPluginRead, auth.ResourceRef{Type: "plugin", ID: selected.pluginID, NamespaceID: selected.namespaceID}) != nil ||
-			service.authorizer.Authorize(ctx, principal, auth.ActionRepositoryRead, auth.ResourceRef{Type: "repository", ID: selected.repositoryID, NamespaceID: selected.namespaceID}) != nil {
+		if service.authorizer.Authorize(ctx, principal, auth.ActionPluginRead, auth.ResourceRef{Type: auth.ResourcePlugin, ID: selected.pluginID, NamespaceID: selected.namespaceID}) != nil {
 			continue
 		}
 		plugins = append(plugins, marketplacejson.Plugin{
@@ -106,14 +106,22 @@ type userMarketplaceVersion struct {
 	version                                                               *semver.Version
 }
 
+func availableCandidateStatus(status string) bool {
+	return status == plugindomain.VersionStatusAvailable || status == "published"
+}
+
+func candidatePluginReadable(status string) bool {
+	return status == plugindomain.PluginStatusActive || status == plugindomain.PluginStatusArchived
+}
+
 func candidateVersion(candidate UserMarketplaceCandidate, origin string) (userMarketplaceVersion, bool) {
-	if candidate.PluginStatus != StatusActive || !repositoryAllowsRead(candidate.RepositoryStatus) || candidate.VersionStatus != "published" ||
+	if !candidatePluginReadable(candidate.PluginStatus) || !repositoryAllowsRead(candidate.RepositoryStatus) || !availableCandidateStatus(candidate.VersionStatus) ||
 		candidate.NamespaceID == "" || !validSlug(candidate.NamespaceSlug) || candidate.PluginID == "" || candidate.RepositoryID == "" ||
 		!validSlug(candidate.PluginSlug) || !validSlug(candidate.RepositorySlug) || !validRef(candidate.TagName) ||
 		!userMarketplaceSHA.MatchString(candidate.CommitSHA) {
 		return userMarketplaceVersion{}, false
 	}
-	version, err := semver.NewVersion(candidate.Version)
+	version, err := semver.NewVersion(strings.TrimPrefix(candidate.Version, "v"))
 	if err != nil || version.Prerelease() != "" || version.Original() != version.String() {
 		return userMarketplaceVersion{}, false
 	}

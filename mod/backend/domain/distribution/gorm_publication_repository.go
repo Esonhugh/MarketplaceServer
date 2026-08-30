@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	identitymodel "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/model"
+	plugindomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/plugin"
 	"github.com/Esonhugh/MarketplaceServer/pkg/distributionservice"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -25,32 +27,61 @@ func (repository *GORMRepository) LoadPublicationInput(ctx context.Context, temp
 	for index, id := range versionIDs {
 		ids[index] = id.String()
 	}
-	var versions []PluginVersion
-	if err := repository.db.WithContext(ctx).Where("id IN ? AND status = ?", ids, StatusActive).Find(&versions).Error; err != nil {
-		return PublicationInput{}, fmt.Errorf("load plugin versions: %w", err)
+	type publicationRow struct {
+		VersionID           string
+		PluginID            string
+		Tag                 string
+		CommitSHA           *string
+		ManifestDigest      *string
+		ManifestSnapshot    []byte
+		PublishedAt         time.Time
+		VersionUpdatedAt    time.Time
+		VersionCreatedAt    time.Time
+		Slug                string
+		Description         string
+		Visibility          string
+		PluginStatus        string
+		ArchivedFrom        *string
+		DefaultVersionTag   *string
+		PluginCreatedAt     time.Time
+		PluginUpdatedAt     time.Time
+		StorageKey          string
+		RepositoryStatus    string
+		RepositoryCreatedAt time.Time
+		RepositoryUpdatedAt time.Time
 	}
-	if len(versions) != len(ids) {
+	var rows []publicationRow
+	if err := repository.db.WithContext(ctx).
+		Table("plugin_versions AS v").
+		Select(`v.id AS version_id, v.plugin_id, v.tag, v.commit_sha, v.manifest_digest, v.manifest_snapshot,
+			v.published_at, v.updated_at AS version_updated_at, v.created_at AS version_created_at,
+			p.slug, p.description, p.visibility, p.status AS plugin_status, p.archived_from, p.default_version_tag,
+			p.created_at AS plugin_created_at, p.updated_at AS plugin_updated_at,
+			r.storage_key, r.status AS repository_status, r.created_at AS repository_created_at, r.updated_at AS repository_updated_at`).
+		Joins("JOIN plugins AS p ON p.id = v.plugin_id AND p.namespace_id = ?", template.NamespaceID).
+		Joins("JOIN repositories AS r ON r.id = p.id").
+		Where("v.id IN ? AND v.status = ? AND p.status = ? AND r.status IN ?", ids, plugindomain.VersionStatusAvailable, plugindomain.PluginStatusActive, []string{RepositoryStatusReady, RepositoryStatusReadOnly}).
+		Find(&rows).Error; err != nil {
+		return PublicationInput{}, fmt.Errorf("load scoped plugin versions: %w", err)
+	}
+	if len(rows) != len(ids) {
 		return PublicationInput{}, distributionservice.ErrNotFound
 	}
-	result := PublicationInput{Template: template, Namespace: namespace, Versions: make([]PublicationVersion, 0, len(versions))}
-	for _, version := range versions {
-		var plugin Plugin
-		if err := repository.db.WithContext(ctx).Where("id = ? AND status = ?", version.PluginID, StatusActive).Take(&plugin).Error; err != nil {
-			return PublicationInput{}, mapPublicationLookupError("load plugin", err)
-		}
-		var sourceRepository Repository
-		if err := repository.db.WithContext(ctx).Where("id = ? AND status IN ?", plugin.RepositoryID, []string{RepositoryStatusReady, RepositoryStatusReadOnly}).Take(&sourceRepository).Error; err != nil {
-			return PublicationInput{}, mapPublicationLookupError("load plugin repository", err)
-		}
-		result.Versions = append(result.Versions, PublicationVersion{Version: version, Plugin: plugin, Repository: sourceRepository})
+	result := PublicationInput{Template: template, Namespace: namespace, Versions: make([]PublicationVersion, 0, len(rows))}
+	for _, row := range rows {
+		result.Versions = append(result.Versions, PublicationVersion{
+			Version:    PluginVersion{ID: row.VersionID, PluginID: row.PluginID, Tag: row.Tag, Status: plugindomain.VersionStatusAvailable, CommitSHA: row.CommitSHA, ManifestDigest: row.ManifestDigest, ManifestSnapshot: append([]byte(nil), row.ManifestSnapshot...), PublishedAt: row.PublishedAt, UpdatedAt: row.VersionUpdatedAt, CreatedAt: row.VersionCreatedAt},
+			Plugin:     Plugin{ID: row.PluginID, NamespaceID: template.NamespaceID, Slug: row.Slug, Description: row.Description, Visibility: row.Visibility, Status: row.PluginStatus, ArchivedFrom: row.ArchivedFrom, DefaultVersionTag: row.DefaultVersionTag, CreatedAt: row.PluginCreatedAt, UpdatedAt: row.PluginUpdatedAt},
+			Repository: Repository{ID: row.PluginID, StorageKey: row.StorageKey, Status: row.RepositoryStatus, CreatedAt: row.RepositoryCreatedAt, UpdatedAt: row.RepositoryUpdatedAt},
+		})
 	}
 	return result, nil
 }
 
-func (repository *GORMRepository) FindPluginDistribution(ctx context.Context, templateID, pluginID, versionID uuid.UUID) (PluginDistribution, error) {
+func (repository *GORMRepository) FindPluginDistribution(ctx context.Context, templateID, pluginID uuid.UUID, tag string) (PluginDistribution, error) {
 	var record PluginDistribution
 	err := repository.db.WithContext(ctx).
-		Where("template_id = ? AND plugin_id = ? AND plugin_version_id = ? AND status = ? AND revoked_at IS NULL", templateID.String(), pluginID.String(), versionID.String(), StatusActive).
+		Where("template_id = ? AND plugin_id = ? AND plugin_tag = ? AND status = ? AND revoked_at IS NULL", templateID.String(), pluginID.String(), tag, StatusActive).
 		Take(&record).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return PluginDistribution{}, distributionservice.ErrNotFound
@@ -107,12 +138,22 @@ func isMarketplacePublicKeyConflict(err error) bool {
 		strings.Contains(message, "marketplace_distributions.public_key")
 }
 
-func (repository *GORMRepository) CreateMarketplaceRevision(ctx context.Context, revision *MarketplaceRevision, items []MarketplaceRevisionItem, projection *MarketplaceDistributionProjection) error {
+func (repository *GORMRepository) CreateMarketplaceRevision(ctx context.Context, revision *MarketplaceRevision, items []MarketplaceRevisionItem, projection *MarketplaceDistributionProjection, artifacts []plugindomain.ProjectionArtifact, pointers []plugindomain.RevisionProjectionPointer) error {
 	if err := repository.db.WithContext(ctx).Create(revision).Error; err != nil {
 		return err
 	}
 	if len(items) > 0 {
 		if err := repository.db.WithContext(ctx).Create(&items).Error; err != nil {
+			return err
+		}
+	}
+	if len(artifacts) > 0 {
+		if err := repository.db.WithContext(ctx).Create(&artifacts).Error; err != nil {
+			return err
+		}
+	}
+	if len(pointers) > 0 {
+		if err := repository.db.WithContext(ctx).Create(&pointers).Error; err != nil {
 			return err
 		}
 	}

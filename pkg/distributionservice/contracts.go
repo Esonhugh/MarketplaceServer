@@ -10,6 +10,7 @@ import (
 
 var (
 	ErrNotFound    = errors.New("distribution not found")
+	ErrGone        = errors.New("distribution gone")
 	ErrUnavailable = errors.New("distribution unavailable")
 )
 

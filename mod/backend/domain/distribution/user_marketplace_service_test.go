@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	plugindomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/plugin"
 	"github.com/Esonhugh/MarketplaceServer/pkg/auth"
 )
 
@@ -14,15 +15,15 @@ func TestUserMarketplaceServiceFiltersAndRendersDeterministically(t *testing.T) 
 	repository := &userMarketplaceRepositoryStub{marketplace: UserMarketplace{
 		UserID: "user-1", Username: "alice", DisplayName: "", Status: "active", NamespaceID: "namespace-1", NamespaceSlug: "alice",
 		Candidates: []UserMarketplaceCandidate{
-			candidate("plugin-z", "zulu", "repo-z", "2.0.0", "published", "v2.0.0", "b"),
-			candidate("plugin-z", "zulu", "repo-z", "10.0.0", "published", "v10.0.0", "c"),
-			candidate("plugin-a", "alpha", "repo-a", "1.0.0", "published", "v1.0.0", "a"),
-			readOnlyCandidate("plugin-r", "readonly", "repo-r", "5.0.0", "published", "v5.0.0", "e"),
+			candidate("plugin-z", "zulu", "repo-z", "2.0.0", "available", "v2.0.0", "b"),
+			candidate("plugin-z", "zulu", "repo-z", "10.0.0", "available", "v10.0.0", "c"),
+			candidate("plugin-a", "alpha", "repo-a", "1.0.0", "available", "v1.0.0", "a"),
+			readOnlyCandidate("plugin-r", "readonly", "repo-r", "5.0.0", "available", "v5.0.0", "e"),
 			candidate("plugin-y", "yank", "repo-y", "99.0.0", "yanked", "v99.0.0", "d"),
-			candidate("plugin-bad", "bad", "repo-bad", "1.0.0", "published", "bad..ref", "e"),
-			candidate("plugin-pre", "pre", "repo-pre", "3.0.0-rc.1", "published", "v3.0.0-rc.1", "f"),
-			candidate("plugin-short", "short", "repo-short", "2", "published", "v2", "1"),
-			candidateInNamespace("plugin-team", "team-one", "shared", "repo-team", "4.0.0", "published", "v4.0.0", "d"),
+			candidate("plugin-bad", "bad", "repo-bad", "1.0.0", "available", "bad..ref", "e"),
+			candidate("plugin-pre", "pre", "repo-pre", "3.0.0-rc.1", "available", "v3.0.0-rc.1", "f"),
+			candidate("plugin-short", "short", "repo-short", "2", "available", "v2", "1"),
+			candidateInNamespace("plugin-team", "team-one", "shared", "repo-team", "4.0.0", "available", "v4.0.0", "d"),
 		},
 	}}
 	service := NewUserMarketplaceService(repository, userMarketplaceAuthorizerStub{})
@@ -50,7 +51,7 @@ func TestUserMarketplaceServiceRequiresExactSelfAndFiltersAuthorization(t *testi
 	principal := testMarketplacePrincipal(t, "user-1", "alice", auth.RestrictedScopes(auth.ActionMarketplaceRead))
 	repository := &userMarketplaceRepositoryStub{marketplace: UserMarketplace{
 		UserID: "user-1", Username: "alice", Status: "active", NamespaceID: "namespace-1", NamespaceSlug: "alice",
-		Candidates: []UserMarketplaceCandidate{candidate("plugin-1", "one", "repo-1", "1.0.0", "published", "v1.0.0", "a")},
+		Candidates: []UserMarketplaceCandidate{candidate("plugin-1", "one", "repo-1", "1.0.0", "available", "v1.0.0", "a")},
 	}}
 	service := NewUserMarketplaceService(repository, userMarketplaceAuthorizerStub{denyPlugin: true})
 	result, err := service.Render(context.Background(), principal, "alice", "http://localhost:8080")
@@ -68,12 +69,50 @@ func TestUserMarketplaceServiceRequiresExactSelfAndFiltersAuthorization(t *testi
 	}
 }
 
+func TestUserMarketplaceServiceIncludesAuthorizedArchivedPlugin(t *testing.T) {
+	principal := testMarketplacePrincipal(t, "user-1", "alice", auth.RestrictedScopes(auth.ActionMarketplaceRead, auth.ActionPluginRead))
+	archived := candidate("plugin-archived", "archived", "repo-archived", "1.0.0", plugindomain.VersionStatusAvailable, "v1.0.0", "a")
+	archived.PluginStatus = plugindomain.PluginStatusArchived
+	repository := &userMarketplaceRepositoryStub{marketplace: UserMarketplace{
+		UserID: "user-1", Username: "alice", Status: "active", NamespaceID: "namespace-1", NamespaceSlug: "alice",
+		Candidates: []UserMarketplaceCandidate{archived},
+	}}
+
+	result, err := NewUserMarketplaceService(repository, userMarketplaceAuthorizerStub{}).Render(context.Background(), principal, "alice", "https://market.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(result.ContentJSON), `"name":"alice-archived"`) {
+		t.Fatalf("authorized archived Plugin was filtered from user marketplace: %s", result.ContentJSON)
+	}
+}
+
+func TestUserMarketplaceServiceExcludesDraftAndDeniedArchivedPlugin(t *testing.T) {
+	principal := testMarketplacePrincipal(t, "user-1", "alice", auth.RestrictedScopes(auth.ActionMarketplaceRead, auth.ActionPluginRead))
+	draft := candidate("plugin-draft", "draft", "repo-draft", "1.0.0", plugindomain.VersionStatusAvailable, "v1.0.0", "a")
+	draft.PluginStatus = plugindomain.PluginStatusDraft
+	archived := candidate("plugin-archived", "archived", "repo-archived", "1.0.0", plugindomain.VersionStatusAvailable, "v1.0.0", "b")
+	archived.PluginStatus = plugindomain.PluginStatusArchived
+	repository := &userMarketplaceRepositoryStub{marketplace: UserMarketplace{
+		UserID: "user-1", Username: "alice", Status: "active", NamespaceID: "namespace-1", NamespaceSlug: "alice",
+		Candidates: []UserMarketplaceCandidate{draft, archived},
+	}}
+
+	result, err := NewUserMarketplaceService(repository, userMarketplaceAuthorizerStub{denyPlugin: true}).Render(context.Background(), principal, "alice", "https://market.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(result.ContentJSON), `"plugins":[]`) {
+		t.Fatalf("draft or denied archived Plugin was selected: %s", result.ContentJSON)
+	}
+}
+
 func candidate(pluginID, pluginSlug, repositorySlug, version, status, tag, shaChar string) UserMarketplaceCandidate {
 	return candidateInNamespace(pluginID, "alice", pluginSlug, repositorySlug, version, status, tag, shaChar)
 }
 
 func candidateInNamespace(pluginID, namespaceSlug, pluginSlug, repositorySlug, version, status, tag, shaChar string) UserMarketplaceCandidate {
-	return UserMarketplaceCandidate{NamespaceID: namespaceSlug + "-namespace", NamespaceSlug: namespaceSlug, PluginID: pluginID, PluginSlug: pluginSlug, PluginStatus: StatusActive, RepositoryID: pluginID + "-repository", RepositorySlug: repositorySlug, RepositoryStatus: RepositoryStatusReady, Version: version, VersionStatus: status, TagName: tag, CommitSHA: strings.Repeat(shaChar, 40)}
+	return UserMarketplaceCandidate{NamespaceID: namespaceSlug + "-namespace", NamespaceSlug: namespaceSlug, PluginID: pluginID, PluginSlug: pluginSlug, PluginStatus: plugindomain.PluginStatusActive, RepositoryID: pluginID + "-repository", RepositorySlug: repositorySlug, RepositoryStatus: RepositoryStatusReady, Version: version, VersionStatus: status, TagName: tag, CommitSHA: strings.Repeat(shaChar, 40)}
 }
 
 func readOnlyCandidate(pluginID, pluginSlug, repositorySlug, version, status, tag, shaChar string) UserMarketplaceCandidate {
@@ -96,11 +135,10 @@ func (stub *userMarketplaceRepositoryStub) FindUserMarketplace(context.Context, 
 type userMarketplaceAuthorizerStub struct {
 	denyMarketplace bool
 	denyPlugin      bool
-	denyRepository  bool
 }
 
 func (stub userMarketplaceAuthorizerStub) Authorize(_ context.Context, _ auth.Principal, action auth.Action, _ auth.ResourceRef) error {
-	if stub.denyMarketplace && action == auth.ActionMarketplaceRead || stub.denyPlugin && action == auth.ActionPluginRead || stub.denyRepository && action == auth.ActionRepositoryRead {
+	if stub.denyMarketplace && action == auth.ActionMarketplaceRead || stub.denyPlugin && action == auth.ActionPluginRead {
 		return errors.New("denied")
 	}
 	return nil

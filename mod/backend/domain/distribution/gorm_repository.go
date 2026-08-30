@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	plugindomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/plugin"
 	"github.com/Esonhugh/MarketplaceServer/pkg/distributionservice"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -24,29 +25,67 @@ func NewGORMRepository(db *gorm.DB) (*GORMRepository, error) {
 
 func (repository *GORMRepository) FindActivePlugin(ctx context.Context, id uuid.UUID) (PluginDistribution, error) {
 	var record PluginDistribution
-	err := repository.db.WithContext(ctx).
-		Table("plugin_distributions AS d").
-		Select("d.*").
-		Joins("JOIN marketplace_templates AS t ON t.id = d.template_id").
-		Joins("JOIN plugins AS p ON p.id = d.plugin_id").
-		Joins("JOIN plugin_versions AS v ON v.id = d.plugin_version_id AND v.plugin_id = p.id").
-		Joins("JOIN repositories AS r ON r.id = d.repository_id AND r.id = p.repository_id AND r.namespace_id = p.namespace_id").
-		Where(`d.id = ? AND d.status = ? AND d.revoked_at IS NULL
-			AND t.status = ? AND t.visibility = ?
-			AND p.status = ? AND p.visibility = ?
-			AND v.status = ?
-			AND r.status IN ? AND r.visibility = ?`,
-			id.String(), StatusActive,
-			StatusActive, "public",
-			StatusActive, "public",
-			StatusActive,
-			[]string{RepositoryStatusReady, RepositoryStatusReadOnly}, "public").
-		Take(&record).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return PluginDistribution{}, distributionservice.ErrNotFound
-	}
+	err := repository.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var disclosed struct{ ID string }
+		err := tx.
+			Table("plugin_distributions AS d").
+			Select("d.id").
+			Joins("JOIN marketplace_templates AS t ON t.id = d.template_id").
+			Joins("JOIN plugins AS p ON p.id = d.plugin_id AND p.namespace_id = t.namespace_id").
+			Where(`d.id = ? AND d.status = ? AND d.revoked_at IS NULL
+				AND t.status = ? AND t.visibility = ?
+				AND p.status IN ? AND p.visibility = ?`,
+				id.String(), StatusActive,
+				StatusActive, plugindomain.VisibilityPublic,
+				[]string{plugindomain.PluginStatusActive, plugindomain.PluginStatusArchived}, plugindomain.VisibilityPublic).
+			Take(&disclosed).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return distributionservice.ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("resolve plugin distribution identity: %w", err)
+		}
+
+		err = tx.
+			Table("plugin_distributions AS d").
+			Select("d.id, d.template_id, d.plugin_id, d.plugin_tag, d.repository_id, d.tag_name, d.source_tag_type, d.source_tag_object_id, d.source_commit_sha, d.source_tree_sha, d.distribution_sha, a.storage_key, d.content_digest, d.status, d.created_at, d.updated_at, d.revoked_at").
+			Joins("JOIN marketplace_templates AS t ON t.id = d.template_id").
+			Joins("JOIN marketplace_revisions AS mr ON mr.id = t.published_revision_id AND mr.template_id = t.id AND mr.status = ?", StatusActive).
+			Joins("JOIN marketplace_revision_items AS i ON i.revision_id = mr.id AND i.plugin_distribution_id = d.id AND i.plugin_id = d.plugin_id AND i.plugin_tag = d.plugin_tag").
+			Joins("JOIN plugins AS p ON p.id = d.plugin_id AND p.namespace_id = t.namespace_id").
+			Joins("JOIN plugin_versions AS v ON v.plugin_id = p.id AND v.tag = i.plugin_tag AND v.status = ?", plugindomain.VersionStatusAvailable).
+			Joins("JOIN repositories AS r ON r.id = p.id AND r.id = d.repository_id AND r.status IN ?", []string{RepositoryStatusReady, RepositoryStatusReadOnly}).
+			Joins("JOIN revision_projection_pointers AS ptr ON ptr.revision_id = i.revision_id AND ptr.plugin_id = i.plugin_id AND ptr.tag = i.plugin_tag AND ptr.available = ? AND ptr.artifact_id IS NOT NULL", true).
+			Joins("JOIN projection_artifacts AS a ON a.id = ptr.artifact_id AND a.kind = ? AND a.state = ? AND a.storage_key <> '' AND a.plugin_id = ptr.plugin_id AND a.tag = ptr.tag AND a.revision_id = ptr.revision_id AND a.source_commit_sha = v.commit_sha", plugindomain.ArtifactKindPlugin, plugindomain.ArtifactStateReady).
+			Where(`d.id = ? AND d.status = ? AND d.revoked_at IS NULL
+				AND t.status = ? AND t.visibility = ?
+				AND p.status IN ? AND p.visibility = ?`,
+				id.String(), StatusActive,
+				StatusActive, plugindomain.VisibilityPublic,
+				[]string{plugindomain.PluginStatusActive, plugindomain.PluginStatusArchived}, plugindomain.VisibilityPublic).
+			Take(&record).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			var deletedVersion int64
+			if countErr := tx.Table("plugin_distributions AS d").
+				Joins("JOIN marketplace_templates AS t ON t.id = d.template_id").
+				Joins("JOIN marketplace_revision_items AS i ON i.plugin_distribution_id = d.id AND i.plugin_id = d.plugin_id AND i.plugin_tag = d.plugin_tag").
+				Joins("JOIN plugin_versions AS v ON v.plugin_id = i.plugin_id AND v.tag = i.plugin_tag AND v.status = ?", plugindomain.VersionStatusDeleted).
+				Where("d.id = ? AND d.status = ? AND d.revoked_at IS NULL AND t.status = ? AND t.visibility = ?", id.String(), StatusActive, StatusActive, plugindomain.VisibilityPublic).
+				Count(&deletedVersion).Error; countErr != nil {
+				return fmt.Errorf("classify deleted plugin distribution: %w", countErr)
+			}
+			if deletedVersion != 0 {
+				return distributionservice.ErrGone
+			}
+			return distributionservice.ErrUnavailable
+		}
+		if err != nil {
+			return fmt.Errorf("resolve plugin projection: %w", err)
+		}
+		return nil
+	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	if err != nil {
-		return PluginDistribution{}, fmt.Errorf("resolve plugin distribution: %w", err)
+		return PluginDistribution{}, err
 	}
 	return record, nil
 }
