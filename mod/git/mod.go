@@ -21,13 +21,15 @@ var _ kernel.Module = (*Mod)(nil)
 
 const (
 	defaultGitBinary        = "git"
+	defaultValidatorBinary  = "claude"
 	defaultMaxRequestBytes  = int64(100 << 20)
 	defaultAdvertiseTimeout = 15 * time.Second
 	defaultServiceTimeout   = 5 * time.Minute
 )
 
 type Config struct {
-	StorageRoot string `yaml:"storageRoot" mapstructure:"storageRoot"`
+	StorageRoot     string `yaml:"storageRoot" mapstructure:"storageRoot"`
+	ValidatorBinary string `yaml:"validatorBinary" mapstructure:"validatorBinary"`
 
 	gitBinary        string
 	maxRequestBytes  int64
@@ -38,16 +40,21 @@ type Config struct {
 type Mod struct {
 	kernel.UnimplementedModule
 
-	config               Config
-	service              *Service
-	repositoryService    gitservice.RepositoryService
-	distributionReader   gitservice.DistributionReader
-	projectionBuilder    gitservice.ProjectionBuilder
-	distributionResolver distributionservice.Resolver
-	resolver             gitservice.RepositoryResolver
-	gitPATAuthenticator  auth.GitPATAuthenticator
-	authorizer           auth.Authorizer
-	log                  *zap.SugaredLogger
+	config                  Config
+	service                 *Service
+	repositoryService       gitservice.RepositoryService
+	repositoryProvisioner   gitservice.RepositoryProvisioner
+	repositoryOrphanCleaner gitservice.RepositoryOrphanCleaner
+	distributionReader      gitservice.DistributionReader
+	projectionBuilder       gitservice.ProjectionBuilder
+	pluginSourceInspector   gitservice.PluginSourceInspector
+	pluginRefReader         gitservice.PluginRefReader
+	receiveCoordinator      gitservice.ReceiveCoordinator
+	distributionResolver    distributionservice.Resolver
+	resolver                gitservice.RepositoryResolver
+	gitPATAuthenticator     auth.GitPATAuthenticator
+	authorizer              auth.Authorizer
+	log                     *zap.SugaredLogger
 }
 
 func (m *Mod) Name() string { return "git" }
@@ -67,11 +74,27 @@ func (m *Mod) Init(hub *kernel.Hub) error {
 	if err != nil {
 		return err
 	}
+	inspector, err := NewPluginSourceInspector(svc, m.config.ValidatorBinary)
+	if err != nil {
+		return err
+	}
 	m.service = svc
 	m.repositoryService = svc
+	m.repositoryProvisioner = svc
+	m.repositoryOrphanCleaner = svc
 	m.distributionReader = svc
 	m.projectionBuilder = svc
-	hub.Map(&m.repositoryService, &m.distributionReader, &m.projectionBuilder)
+	m.pluginSourceInspector = inspector
+	m.pluginRefReader = svc
+	hub.Map(
+		&m.repositoryService,
+		&m.repositoryProvisioner,
+		&m.repositoryOrphanCleaner,
+		&m.distributionReader,
+		&m.projectionBuilder,
+		&m.pluginSourceInspector,
+		&m.pluginRefReader,
+	)
 	return nil
 }
 
@@ -111,6 +134,14 @@ func (m *Mod) Load(hub *kernel.Hub) error {
 	if nilInterface(distributionResolver) {
 		return errors.New("distributionservice.Resolver from kernel is nil")
 	}
+	var receiveCoordinator gitservice.ReceiveCoordinator
+	if err := hub.Load(&receiveCoordinator); err != nil {
+		return errors.New("can't load gitservice.ReceiveCoordinator from kernel")
+	}
+	if nilInterface(receiveCoordinator) {
+		return errors.New("gitservice.ReceiveCoordinator from kernel is nil")
+	}
+	m.receiveCoordinator = receiveCoordinator
 	m.resolver = resolver
 	m.gitPATAuthenticator = gitPATAuthenticator
 	m.authorizer = authorizer
@@ -136,6 +167,9 @@ func nilInterface(value any) bool {
 func (m *Mod) applyDefaults() {
 	if m.config.gitBinary == "" {
 		m.config.gitBinary = defaultGitBinary
+	}
+	if m.config.ValidatorBinary == "" {
+		m.config.ValidatorBinary = defaultValidatorBinary
 	}
 	if m.config.maxRequestBytes == 0 {
 		m.config.maxRequestBytes = defaultMaxRequestBytes
@@ -178,9 +212,9 @@ func (m *Mod) handleInfoRefs(c *jinengine.Context) {
 	var contentType string
 	switch service {
 	case "git-upload-pack":
-		action, contentType = auth.ActionRepositoryRead, "application/x-git-upload-pack-advertisement"
+		action, contentType = auth.ActionPluginRead, "application/x-git-upload-pack-advertisement"
 	case "git-receive-pack":
-		action, contentType = auth.ActionRepositoryWrite, "application/x-git-receive-pack-advertisement"
+		action, contentType = auth.ActionPluginWrite, "application/x-git-receive-pack-advertisement"
 	default:
 		writePlain(c, http.StatusNotFound, "unsupported git service\n")
 		return
@@ -196,15 +230,52 @@ func (m *Mod) handleInfoRefs(c *jinengine.Context) {
 }
 
 func (m *Mod) handleUploadPack(c *jinengine.Context) {
-	m.handleServiceRPC(c, "git-upload-pack", auth.ActionRepositoryRead, "application/x-git-upload-pack-result", func(ctx context.Context, repositoryID string, body io.Reader, stdout io.Writer) error {
+	m.handleServiceRPC(c, "git-upload-pack", auth.ActionPluginRead, "application/x-git-upload-pack-result", func(ctx context.Context, repositoryID string, body io.Reader, stdout io.Writer) error {
 		return m.service.UploadPack(ctx, repositoryID, body, stdout, io.Discard)
 	})
 }
 
 func (m *Mod) handleReceivePack(c *jinengine.Context) {
-	m.handleServiceRPC(c, "git-receive-pack", auth.ActionRepositoryWrite, "application/x-git-receive-pack-result", func(ctx context.Context, repositoryID string, body io.Reader, stdout io.Writer) error {
-		return m.service.ReceivePack(ctx, repositoryID, body, stdout, io.Discard)
+	namespace, repositorySlug, ok := routeRepository(c)
+	if !ok {
+		writePlain(c, http.StatusNotFound, "repository not found\n")
+		return
+	}
+	repository, requestContext, ok := m.authorizeRepository(c, namespace, repositorySlug, auth.ActionPluginWrite, auth.GitOperationWrite)
+	if !ok || !contentLengthWithinLimit(c, m.config.maxRequestBytes) {
+		return
+	}
+	if nilInterface(m.receiveCoordinator) {
+		writePlain(c, http.StatusServiceUnavailable, "protected receive unavailable\n")
+		return
+	}
+	if err := m.service.InstallProtectedReceiveHooks(requestContext, repository.ID); err != nil {
+		writePlain(c, http.StatusServiceUnavailable, "protected receive unavailable\n")
+		return
+	}
+	setGitHeaders(c, "application/x-git-receive-pack-result")
+	body := io.Reader(c.Request.Body)
+	if m.config.maxRequestBytes > 0 {
+		body = http.MaxBytesReader(c.Writer, c.Request.Body, m.config.maxRequestBytes)
+	}
+	requestContext = context.WithValue(requestContext, receiveContextKey{}, receiveContext{
+		coordinator:  m.receiveCoordinator,
+		inspector:    m.pluginSourceInspector,
+		repositoryID: repository.ID,
+		pluginName:   repositorySlug,
 	})
+	if err := m.service.ReceivePack(requestContext, repository.ID, body, c.Writer, io.Discard); err != nil {
+		m.handleGitError(c, err)
+	}
+}
+
+type receiveContextKey struct{}
+
+type receiveContext struct {
+	coordinator  gitservice.ReceiveCoordinator
+	inspector    gitservice.PluginSourceInspector
+	repositoryID string
+	pluginName   string
 }
 
 type gitRPC func(context.Context, string, io.Reader, io.Writer) error
@@ -243,18 +314,18 @@ func (m *Mod) authorizeRepository(c *jinengine.Context, namespace, repositorySlu
 		writeAuthenticationRequired(c)
 		return gitservice.Repository{}, nil, false
 	}
-	if action == auth.ActionRepositoryWrite && !supplied {
+	if action == auth.ActionPluginWrite && !supplied {
 		writeAuthenticationRequired(c)
 		return gitservice.Repository{}, nil, false
 	}
-	if action == auth.ActionRepositoryRead && !supplied && repository.Visibility != gitservice.VisibilityPublic {
+	if action == auth.ActionPluginRead && !supplied && repository.Visibility != gitservice.VisibilityPublic {
 		writeAuthenticationRequired(c)
 		return gitservice.Repository{}, nil, false
 	}
 	requestContext := auth.ContextWithPrincipal(c.Request.Context(), principal)
-	resource := auth.ResourceRef{Type: "repository", ID: repository.ID, NamespaceID: repository.NamespaceID}
+	resource := auth.ResourceRef{Type: auth.ResourcePlugin, ID: repository.ID, NamespaceID: repository.NamespaceID}
 	if err := m.authorizer.Authorize(requestContext, principal, action, resource); err != nil {
-		if !supplied && action == auth.ActionRepositoryRead && repository.Visibility != gitservice.VisibilityPublic {
+		if !supplied {
 			writeAuthenticationRequired(c)
 		} else {
 			writePlain(c, http.StatusForbidden, "repository access denied\n")
@@ -265,7 +336,7 @@ func (m *Mod) authorizeRepository(c *jinengine.Context, namespace, repositorySlu
 }
 
 func gitOperationForAction(action auth.Action) auth.GitOperation {
-	if action == auth.ActionRepositoryWrite {
+	if action == auth.ActionPluginWrite {
 		return auth.GitOperationWrite
 	}
 	return auth.GitOperationRead
@@ -273,9 +344,9 @@ func gitOperationForAction(action auth.Action) auth.GitOperation {
 
 func repositoryAllowsAction(repository gitservice.Repository, action auth.Action) bool {
 	switch action {
-	case auth.ActionRepositoryRead:
+	case auth.ActionPluginRead:
 		return repository.Status == gitservice.StatusReady || repository.Status == gitservice.StatusReadOnly
-	case auth.ActionRepositoryWrite:
+	case auth.ActionPluginWrite:
 		return repository.Status == gitservice.StatusReady
 	default:
 		return false

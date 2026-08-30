@@ -36,7 +36,13 @@ func (s *Service) BuildPluginProjection(ctx context.Context, cmd gitservice.Buil
 		return result, err
 	}
 	tagRef := "refs/tags/" + cmd.TagName
-	sourceTagType, sourceTagObjectID, sourceCommitSHA, sourceTreeSHA, err := s.resolveSourceTag(ctx, sourcePath, tagRef)
+	var sourceTagType gitservice.SourceTagType
+	var sourceTagObjectID, sourceCommitSHA, sourceTreeSHA string
+	if cmd.SourceObjectID == "" {
+		sourceTagType, sourceTagObjectID, sourceCommitSHA, sourceTreeSHA, err = s.resolveSourceTag(ctx, sourcePath, tagRef)
+	} else {
+		sourceTagType, sourceTagObjectID, sourceCommitSHA, sourceTreeSHA, err = s.resolveSourceObject(ctx, sourcePath, cmd.SourceObjectID)
+	}
 	if err != nil {
 		return result, err
 	}
@@ -98,42 +104,49 @@ func (s *Service) BuildPluginProjection(ctx context.Context, cmd gitservice.Buil
 }
 
 func (s *Service) resolveSourceTag(ctx context.Context, sourcePath, tagRef string) (gitservice.SourceTagType, string, string, string, error) {
-	objectType, err := s.gitOutput(ctx, nil, "--git-dir="+sourcePath, "cat-file", "-t", tagRef)
+	objectID, err := s.gitOutput(ctx, nil, "--git-dir="+sourcePath, "rev-parse", "--verify", tagRef)
+	if err != nil {
+		return "", "", "", "", errors.New("resolve source tag object")
+	}
+	return s.resolveSourceObject(ctx, sourcePath, strings.TrimSpace(objectID))
+}
+
+func (s *Service) resolveSourceObject(ctx context.Context, sourcePath, objectID string) (gitservice.SourceTagType, string, string, string, error) {
+	if !validGitObjectID(objectID) {
+		return "", "", "", "", errors.New("invalid source object")
+	}
+	objectType, err := s.gitOutput(ctx, nil, "--git-dir="+sourcePath, "cat-file", "-t", objectID)
 	if err != nil {
 		return "", "", "", "", errors.New("resolve source tag")
 	}
 	objectType = strings.TrimSpace(objectType)
 	var tagType gitservice.SourceTagType
-	var tagObjectID string
+	sourceTagObjectID := objectID
 	switch objectType {
 	case "tag":
 		tagType = gitservice.SourceTagAnnotated
-		tagObjectID, err = s.gitOutput(ctx, nil, "--git-dir="+sourcePath, "rev-parse", "--verify", tagRef)
 	case "commit":
 		tagType = gitservice.SourceTagLightweight
+		sourceTagObjectID = ""
 	default:
 		return "", "", "", "", fmt.Errorf("source tag points to unsupported object type %q", objectType)
 	}
-	if err != nil {
-		return "", "", "", "", errors.New("resolve source tag object")
-	}
-	tagObjectID = strings.TrimSpace(tagObjectID)
-	commitSHA, err := s.gitOutput(ctx, nil, "--git-dir="+sourcePath, "rev-parse", "--verify", tagRef+"^{commit}")
+	commitSHA, err := s.gitOutput(ctx, nil, "--git-dir="+sourcePath, "rev-parse", "--verify", objectID+"^{commit}")
 	if err != nil {
 		return "", "", "", "", errors.New("resolve source tag commit")
 	}
 	commitSHA = strings.TrimSpace(commitSHA)
-	treeSHA, err := s.gitOutput(ctx, nil, "--git-dir="+sourcePath, "rev-parse", "--verify", tagRef+"^{tree}")
+	treeSHA, err := s.gitOutput(ctx, nil, "--git-dir="+sourcePath, "rev-parse", "--verify", objectID+"^{tree}")
 	if err != nil {
 		return "", "", "", "", errors.New("resolve source tag tree")
 	}
 	treeSHA = strings.TrimSpace(treeSHA)
-	for name, value := range map[string]string{"tag object": tagObjectID, "commit": commitSHA, "tree": treeSHA} {
-		if value != "" && !objectIDPattern.MatchString(value) {
+	for name, value := range map[string]string{"source object": objectID, "commit": commitSHA, "tree": treeSHA} {
+		if !validGitObjectID(value) {
 			return "", "", "", "", fmt.Errorf("invalid source %s ID", name)
 		}
 	}
-	return tagType, tagObjectID, commitSHA, treeSHA, nil
+	return tagType, sourceTagObjectID, commitSHA, treeSHA, nil
 }
 
 func (s *Service) copyTreeClosure(ctx context.Context, sourcePath, destinationPath, treeSHA string) error {

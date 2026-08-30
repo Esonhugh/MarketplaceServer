@@ -30,6 +30,7 @@ sql:
 
 git:
   storageRoot: "./var/marketplace/git"
+  validatorBinary: "claude"
 
 backend:
   # Keep empty. MARKETPLACE_JWT_SECRET takes precedence and must be set in production.

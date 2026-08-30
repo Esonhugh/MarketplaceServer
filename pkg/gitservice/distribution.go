@@ -35,10 +35,11 @@ const (
 )
 
 type BuildPluginProjectionCommand struct {
-	ProjectionID uuid.UUID
-	RepositoryID string
-	TagName      string
-	PublishedAt  time.Time
+	ProjectionID   uuid.UUID
+	RepositoryID   string
+	TagName        string
+	SourceObjectID string
+	PublishedAt    time.Time
 }
 
 type PluginProjectionResult struct {

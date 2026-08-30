@@ -15,8 +15,8 @@ import (
 
 	"github.com/Esonhugh/MarketplaceServer/core/kernel"
 	backendmod "github.com/Esonhugh/MarketplaceServer/mod/backend"
-	distributiondomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/distribution"
 	identitymodel "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/model"
+	plugindomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/plugin"
 	"github.com/Esonhugh/MarketplaceServer/pkg/auth"
 	"github.com/Esonhugh/MarketplaceServer/pkg/gitservice"
 	"github.com/google/uuid"
@@ -203,7 +203,11 @@ func newProductionSmartHTTPHarness(t *testing.T, fakeBinary bool) *productionSma
 	if err := db.Create(&identitymodel.Namespace{ID: namespaceID, Kind: identitymodel.NamespaceKindUser, Slug: "alice", DisplayName: "Alice", OwnerUserID: &ownerID}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&distributiondomain.Repository{ID: repositoryID, NamespaceID: namespaceID, Slug: "plugin-one", Visibility: "private", Status: distributiondomain.RepositoryStatusReady, StorageKey: uuid.NewString()}).Error; err != nil {
+	now := time.Now().UTC()
+	if err := db.Create(&plugindomain.Plugin{ID: repositoryID, NamespaceID: namespaceID, Slug: "plugin-one", Visibility: plugindomain.VisibilityPrivate, Status: plugindomain.PluginStatusDraft, CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&plugindomain.Repository{ID: repositoryID, Status: plugindomain.RepositoryStatusReady, StorageKey: repositoryID, CreatedAt: now, UpdatedAt: now}).Error; err != nil {
 		t.Fatal(err)
 	}
 	var repositories gitservice.RepositoryService
