@@ -69,16 +69,12 @@ func installIdentityDatabaseGuards(db *gorm.DB) error {
 			}
 		}
 		return nil
-	case "mysql":
+	case "sqlite":
 		statements := []string{
-			`DROP TRIGGER IF EXISTS marketplace_users_identity_immutable`,
-			`CREATE TRIGGER marketplace_users_identity_immutable BEFORE UPDATE ON users FOR EACH ROW BEGIN IF OLD.username <> NEW.username OR NOT (OLD.email <=> NEW.email) THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'immutable identity field'; END IF; END`,
-			`DROP TRIGGER IF EXISTS marketplace_namespaces_identity_immutable`,
-			`CREATE TRIGGER marketplace_namespaces_identity_immutable BEFORE UPDATE ON namespaces FOR EACH ROW BEGIN IF OLD.kind <> NEW.kind OR OLD.slug <> NEW.slug OR NOT (OLD.owner_user_id <=> NEW.owner_user_id) THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'immutable identity field'; END IF; END`,
-			`DROP TRIGGER IF EXISTS marketplace_system_groups_immutable_update`,
-			`CREATE TRIGGER marketplace_system_groups_immutable_update BEFORE UPDATE ON system_groups FOR EACH ROW BEGIN IF NOT (OLD.id <=> NEW.id) OR NOT (OLD.name <=> NEW.name) OR NOT (OLD.description <=> NEW.description) OR NOT (OLD.created_at <=> NEW.created_at) OR NOT (OLD.updated_at <=> NEW.updated_at) THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'immutable system group'; END IF; END`,
-			`DROP TRIGGER IF EXISTS marketplace_system_groups_immutable_delete`,
-			`CREATE TRIGGER marketplace_system_groups_immutable_delete BEFORE DELETE ON system_groups FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'immutable system group'`,
+			`CREATE TRIGGER IF NOT EXISTS marketplace_users_identity_immutable BEFORE UPDATE OF username, email ON users FOR EACH ROW WHEN OLD.username IS NOT NEW.username OR OLD.email IS NOT NEW.email BEGIN SELECT RAISE(ABORT, 'immutable identity field'); END`,
+			`CREATE TRIGGER IF NOT EXISTS marketplace_namespaces_identity_immutable BEFORE UPDATE OF kind, slug, owner_user_id ON namespaces FOR EACH ROW WHEN OLD.kind IS NOT NEW.kind OR OLD.slug IS NOT NEW.slug OR OLD.owner_user_id IS NOT NEW.owner_user_id BEGIN SELECT RAISE(ABORT, 'immutable identity field'); END`,
+			`CREATE TRIGGER IF NOT EXISTS marketplace_system_groups_immutable_update BEFORE UPDATE ON system_groups FOR EACH ROW BEGIN SELECT RAISE(ABORT, 'immutable system group'); END`,
+			`CREATE TRIGGER IF NOT EXISTS marketplace_system_groups_immutable_delete BEFORE DELETE ON system_groups FOR EACH ROW BEGIN SELECT RAISE(ABORT, 'immutable system group'); END`,
 		}
 		for _, statement := range statements {
 			if err := db.Exec(statement).Error; err != nil {

@@ -88,9 +88,9 @@ func (authenticator *PATAuthenticator) authenticate(ctx context.Context, usernam
 }
 
 func principalForPAT(record dao.TokenCredentialRecord) (auth.Principal, error) {
-	actions := []auth.Action{auth.ActionMarketplaceRead, auth.ActionPluginRead, auth.ActionRepositoryRead}
+	actions := []auth.Action{auth.ActionMarketplaceRead, auth.ActionPluginRead}
 	if record.Preset == model.TokenPresetGitWrite {
-		actions = append(actions, auth.ActionRepositoryWrite)
+		actions = append(actions, auth.ActionPluginWrite)
 	}
 	principal, err := auth.NewUserPrincipal(record.UserID, record.Username, auth.CredentialPAT, auth.RestrictedScopes(actions...))
 	if err != nil {

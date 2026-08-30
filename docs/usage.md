@@ -22,7 +22,8 @@ cp config.example.yaml config.yaml
 
 至少配置：
 
-- `sql.dsn`：PostgreSQL 或 MySQL DSN；
+- `sql.driver`：生产使用 `postgres`；单进程本地开发/测试可使用 `sqlite`；
+- `sql.dsn`：所选 PostgreSQL 或 SQLite 数据源；
 - `git.storageRoot`：持久化 Git storage root；
 - `MARKETPLACE_API_KEY_PEPPER`：Base64 编码、解码后至少 32 bytes 的随机 secret；
 - `MARKETPLACE_BOOTSTRAP_ADMIN_PASSWORD`：首次初始化管理员时使用的 password；

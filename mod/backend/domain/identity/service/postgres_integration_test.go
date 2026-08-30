@@ -60,7 +60,7 @@ func TestPostgresPATAuthenticatorRejectsPasswordAndEnforcesPreset(t *testing.T) 
 		t.Fatalf("create token: %v", err)
 	}
 	principal, err := authenticator.AuthenticateGitPAT(context.Background(), "alice", key, auth.GitOperationRead)
-	if err != nil || principal.CredentialKind() != auth.CredentialPAT || !principal.Allows(auth.ActionRepositoryRead) || principal.Allows(auth.ActionRepositoryWrite) {
+	if err != nil || principal.CredentialKind() != auth.CredentialPAT || !principal.Allows(auth.ActionPluginRead) || principal.Allows(auth.ActionPluginWrite) {
 		t.Fatalf("PAT principal = %#v, %v", principal, err)
 	}
 	if _, err := authenticator.AuthenticateGitPAT(context.Background(), "alice", key, auth.GitOperationWrite); !errors.Is(err, ErrInvalidCredentials) {

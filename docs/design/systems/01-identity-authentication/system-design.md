@@ -140,4 +140,4 @@ active --DELETE/revoke------> revoked
 - **Evidence:** `domain/identity/{model,dao,service}`、`handler/identity`、backend route wiring、identity allow/deny tests 与 deployed OpenAPI conformance tests
 - **Compatibility boundary:** legacy scope/HMAC-only PAT schema 启动拒绝；不自动 backfill、drop 或双读
 - **Remaining hardening:** audit events、operator secret rotation、non-development legacy migration plan；broader Plugin/Marketplace/team management API 仍不属于本 slice
-- **Verification boundary:** PostgreSQL/MySQL/race/frontend 是否通过必须引用实际执行报告，不由 `implemented` 状态推定
+- **Verification boundary:** PostgreSQL/SQLite/race/frontend 是否通过必须引用实际执行报告，不由 `implemented` 状态推定；MarketplaceServer 运行时不支持 MySQL

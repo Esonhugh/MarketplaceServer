@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/Esonhugh/MarketplaceServer/core/kernel"
-	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
+	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -119,11 +119,22 @@ func (m *Mod) Stop(wg *sync.WaitGroup, _ context.Context) error {
 func (m *Mod) dialector() (gorm.Dialector, error) {
 	driver := strings.ToLower(strings.TrimSpace(m.config.Driver))
 	switch driver {
-	case "", "mysql":
-		return mysql.Open(m.config.DSN), nil
-	case "postgres", "postgresql":
+	case "", "postgres", "postgresql":
 		return postgres.Open(m.config.DSN), nil
+	case "sqlite":
+		return sqlite.Open(sqliteDSN(m.config.DSN)), nil
 	default:
-		return nil, fmt.Errorf("unsupported sql driver %q", m.config.Driver)
+		return nil, fmt.Errorf("unsupported sql driver %q; supported drivers are postgres and sqlite", m.config.Driver)
 	}
+}
+
+func sqliteDSN(dsn string) string {
+	if dsn == ":memory:" {
+		dsn = "file::memory:?cache=shared"
+	}
+	separator := "?"
+	if strings.Contains(dsn, "?") {
+		separator = "&"
+	}
+	return dsn + separator + "_foreign_keys=on&_busy_timeout=5000"
 }

@@ -66,7 +66,7 @@ Repository query 和 mutation 必须：
 - list 的稳定排序、page/size bound 和 exact filtered total；
 - 报告因 `MARKETPLACE_TEST_POSTGRES_DSN` 等环境缺失而 skipped 的 suite。
 
-测试只声明实际验证过的数据库和行为。未运行 MySQL/PostgreSQL integration test 时不能声称对应 driver 已验证。
+测试只声明实际验证过的数据库和行为。未运行 PostgreSQL integration test 时不能声称生产数据库覆盖已验证；SQLite 结果只代表单进程开发/测试边界。MarketplaceServer 运行时不支持 MySQL。
 
 ## 5. 当前兼容性记录
 

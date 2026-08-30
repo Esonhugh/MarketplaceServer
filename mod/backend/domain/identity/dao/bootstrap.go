@@ -102,20 +102,7 @@ func (bootstrapper *Bootstrapper) Bootstrap(ctx context.Context) error {
 			return nil
 		})
 	}
-	if !strings.EqualFold(bootstrapper.db.Dialector.Name(), "mysql") {
-		return runTransaction(bootstrapper.db)
-	}
-	connection := bootstrapper.db.Connection(func(db *gorm.DB) error {
-		if err := acquireMySQLBootstrapLock(db); err != nil {
-			return err
-		}
-		defer func() { _ = db.Exec("SELECT RELEASE_LOCK(?)", "marketplace_identity_bootstrap").Error }()
-		return runTransaction(db)
-	})
-	if connection != nil {
-		return fmt.Errorf("serialize identity bootstrap: %w", connection)
-	}
-	return nil
+	return runTransaction(bootstrapper.db)
 }
 
 func ensureSystemGroups(tx *gorm.DB) error {
@@ -155,20 +142,9 @@ func lockBootstrapTransaction(tx *gorm.DB) error {
 	switch strings.ToLower(tx.Dialector.Name()) {
 	case "postgres":
 		return tx.Exec("SELECT pg_advisory_xact_lock(?)", bootstrapLockID).Error
-	case "mysql":
+	case "sqlite":
 		return nil
 	default:
 		return fmt.Errorf("unsupported bootstrap database driver %q", tx.Dialector.Name())
 	}
-}
-
-func acquireMySQLBootstrapLock(db *gorm.DB) error {
-	var acquired int
-	if err := db.Raw("SELECT GET_LOCK(?, ?)", "marketplace_identity_bootstrap", 30).Scan(&acquired).Error; err != nil {
-		return err
-	}
-	if acquired != 1 {
-		return errors.New("database bootstrap lock was not acquired")
-	}
-	return nil
 }

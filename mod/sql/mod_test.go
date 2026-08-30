@@ -56,10 +56,10 @@ func TestDialectorSelectsSupportedDrivers(t *testing.T) {
 		driverName string
 		want       string
 	}{
-		{name: "default mysql", driverName: "", want: "mysql"},
-		{name: "mysql", driverName: "mysql", want: "mysql"},
+		{name: "default postgres", driverName: "", want: "postgres"},
 		{name: "postgres", driverName: "postgres", want: "postgres"},
 		{name: "postgresql alias", driverName: "postgresql", want: "postgres"},
+		{name: "sqlite", driverName: "sqlite", want: "sqlite"},
 	}
 
 	for _, tt := range tests {
@@ -76,14 +76,51 @@ func TestDialectorSelectsSupportedDrivers(t *testing.T) {
 	}
 }
 
-func TestDialectorRejectsUnknownDriver(t *testing.T) {
-	m := &Mod{config: Config{Driver: "sqlite", DSN: "test-dsn"}}
-	_, err := m.dialector()
-	if err == nil {
-		t.Fatal("dialector() succeeded for unsupported driver, want error")
+func TestSQLiteDialectorEnablesForeignKeysAndBusyTimeout(t *testing.T) {
+	m := &Mod{config: Config{Driver: "sqlite", DSN: "marketplace.db"}}
+	dialector, err := m.dialector()
+	if err != nil {
+		t.Fatalf("dialector() returned error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "unsupported") || strings.Contains(err.Error(), m.config.DSN) {
-		t.Fatalf("dialector() error = %q, want unsupported driver error without DSN", err.Error())
+	if got, want := dialector.Name(), "sqlite"; got != want {
+		t.Fatalf("dialector().Name() = %q, want %q", got, want)
+	}
+	config, ok := dialector.(interface{ GetDSN() string })
+	if ok {
+		dsn := config.GetDSN()
+		if !strings.Contains(dsn, "_foreign_keys=on") || !strings.Contains(dsn, "_busy_timeout=5000") {
+			t.Fatalf("sqlite DSN = %q, want foreign-key enforcement and bounded busy timeout", dsn)
+		}
+	}
+}
+
+func TestSQLiteDSN(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  string
+	}{
+		{input: "marketplace.db", want: "marketplace.db?_foreign_keys=on&_busy_timeout=5000"},
+		{input: "file:marketplace.db?mode=rwc", want: "file:marketplace.db?mode=rwc&_foreign_keys=on&_busy_timeout=5000"},
+		{input: ":memory:", want: "file::memory:?cache=shared&_foreign_keys=on&_busy_timeout=5000"},
+	} {
+		if got := sqliteDSN(test.input); got != test.want {
+			t.Errorf("sqliteDSN(%q) = %q, want %q", test.input, got, test.want)
+		}
+	}
+}
+
+func TestDialectorRejectsUnsupportedDrivers(t *testing.T) {
+	for _, driverName := range []string{"mysql", "unknown"} {
+		t.Run(driverName, func(t *testing.T) {
+			m := &Mod{config: Config{Driver: driverName, DSN: "test-dsn"}}
+			_, err := m.dialector()
+			if err == nil {
+				t.Fatal("dialector() succeeded for unsupported driver, want error")
+			}
+			if !strings.Contains(err.Error(), "unsupported") || strings.Contains(err.Error(), m.config.DSN) {
+				t.Fatalf("dialector() error = %q, want unsupported driver error without DSN", err.Error())
+			}
+		})
 	}
 }
 

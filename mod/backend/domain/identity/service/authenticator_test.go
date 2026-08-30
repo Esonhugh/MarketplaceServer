@@ -48,13 +48,13 @@ func TestPATAuthenticatorPlaneCapabilities(t *testing.T) {
 			if err != nil || principal.CredentialKind() != auth.CredentialPAT {
 				t.Fatalf("subscription = %#v, %v", principal, err)
 			}
-			for _, action := range []auth.Action{auth.ActionMarketplaceRead, auth.ActionPluginRead, auth.ActionRepositoryRead} {
+			for _, action := range []auth.Action{auth.ActionMarketplaceRead, auth.ActionPluginRead} {
 				if !principal.Allows(action) {
 					t.Fatalf("preset %q does not allow %q", preset, action)
 				}
 			}
-			if got := principal.Allows(auth.ActionRepositoryWrite); got != (preset == model.TokenPresetGitWrite) {
-				t.Fatalf("preset %q repository.write = %t", preset, got)
+			if got := principal.Allows(auth.ActionPluginWrite); got != (preset == model.TokenPresetGitWrite) {
+				t.Fatalf("preset %q plugin.write = %t", preset, got)
 			}
 			_, readErr := authenticator.AuthenticateGitPAT(context.Background(), "alice", plaintext, auth.GitOperationRead)
 			_, writeErr := authenticator.AuthenticateGitPAT(context.Background(), "alice", plaintext, auth.GitOperationWrite)

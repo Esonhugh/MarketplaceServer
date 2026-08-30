@@ -6,7 +6,7 @@
 - **Last reviewed:** 2026-08-12
 - **Approval record:** 用户通过逐项 AskUser 评审直接批准
 
-> 本 schema 已由 `domain/identity/model`、`dao` 和 `service` 实现；具体数据库是否通过 PostgreSQL/MySQL 集成验证必须引用实际 test report，不能仅由设计状态推定。
+> 本 schema 已由 `domain/identity/model`、`dao` 和 `service` 实现；PostgreSQL production 与 SQLite 单进程测试覆盖必须引用实际 test report，不能仅由设计状态推定。MarketplaceServer 运行时不支持 MySQL。
 
 ## 1. Schema 增量
 
@@ -84,6 +84,6 @@ Revoked 优先于 expired。Revoke 只设置 `revoked_at`，不删除记录或 s
 
 Schema authority 仍是 identity GORM records、ordered model list 和 `mod/backend/migrate.go` 的 `AutoMigrate` coordinator。
 
-当前测试覆盖 model/ordered migration list、legacy guard、三个 preset allow/unknown deny、duplicate HMAC/owner predicate、page/total/order、revoke/expiry status，以及 metadata projection 不读取或泄露 `secret_plaintext`。PostgreSQL 条件 suite 需要 `MARKETPLACE_TEST_POSTGRES_DSN`；MySQL 未实际运行时不得声称已验证。
+当前测试覆盖 model/ordered migration list、legacy guard、三个 preset allow/unknown deny、duplicate HMAC/owner predicate、page/total/order、revoke/expiry status，以及 metadata projection 不读取或泄露 `secret_plaintext`。PostgreSQL 条件 suite 需要 `MARKETPLACE_TEST_POSTGRES_DSN`；SQLite 只覆盖单进程开发/测试边界。
 
 本实现不提供旧 PAT 数据迁移。开发数据库重建流程见 [Operations](../../../operations.md)；任何非开发环境存在数据时必须停止并设计显式迁移/credential rotation，而不是静默删除。

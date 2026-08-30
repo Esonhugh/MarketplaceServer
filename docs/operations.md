@@ -19,7 +19,7 @@ go build ./...
 go test -race ./...
 ```
 
-PostgreSQL-backed constraint 与 production-wiring tests 需要 `MARKETPLACE_TEST_POSTGRES_DSN`。未提供时测试会显式 skip；结果报告必须说明未执行的数据库覆盖，不能写成全部通过。仓库包含 MySQL migration 分支，但未实际运行 MySQL suite 时也不得声称 MySQL 已验证。
+PostgreSQL-backed constraint 与 production-wiring tests 需要 `MARKETPLACE_TEST_POSTGRES_DSN`。未提供时测试会显式 skip；结果报告必须说明未执行的数据库覆盖，不能写成全部通过。MarketplaceServer 运行时不支持 MySQL；SQLite 仅用于单进程本地开发和测试。
 
 ### Frontend 变更
 
@@ -83,7 +83,7 @@ Go toolchain 版本以 `go.mod` 为准。支持配置键和安全示例以 [`con
 
 Identity migration 在以下任一情况返回 `identity: legacy credential schema requires operator rebuild` 并拒绝 backend 启动：存在旧 `personal_access_token_scopes` table，或已有 `personal_access_tokens` 缺少 `preset`、`secret_plaintext`、`secret_hmac`。该 guard 位于 `mod/backend/domain/identity/dao/migrate.go`，不会自动 drop、backfill 或启用双读 compatibility。
 
-开发数据库若可丢弃，operator 应先停止服务、确认没有需保留数据，再使用所选数据库的管理工具删除并重建整个开发 database/schema，然后重新启动让 migration 和 bootstrap 创建目标 schema。仓库不提供通用 destructive 命令，因为 PostgreSQL/MySQL、权限和部署形态不同。生产或任何有价值环境必须先备份，评估旧 PAT 的 revoke/rotation，并交付显式迁移方案；不得直接采用开发重建流程。
+开发数据库若可丢弃，operator 应先停止服务、确认没有需保留数据，再使用所选数据库的管理工具删除并重建整个开发 database/schema，然后重新启动让 migration 和 bootstrap 创建目标 schema。仓库不提供通用 destructive 命令，因为 PostgreSQL/SQLite、权限和部署形态不同。生产或任何有价值环境必须先备份，评估旧 PAT 的 revoke/rotation，并交付显式迁移方案；不得直接采用开发重建流程。
 
 ## 持久化数据
 
