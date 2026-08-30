@@ -25,7 +25,7 @@ func TestPrincipalAndScopeBehavior(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewUserPrincipal with zero scopes: %v", err)
 	}
-	if zeroScopesUser.Allows(auth.ActionRepositoryRead) {
+	if zeroScopesUser.Allows(auth.ActionPluginRead) {
 		t.Fatal("zero-value scope set must fail closed")
 	}
 
@@ -36,20 +36,20 @@ func TestPrincipalAndScopeBehavior(t *testing.T) {
 	if !passwordUser.IsUser() || passwordUser.UserID() != "user-1" || passwordUser.Username() != "alice" {
 		t.Fatal("user principal lost immutable identity")
 	}
-	if !passwordUser.Allows(auth.ActionRepositoryWrite) {
-		t.Fatal("unrestricted principal should allow repository.write")
+	if !passwordUser.Allows(auth.ActionPluginWrite) {
+		t.Fatal("unrestricted principal should allow plugin.write")
 	}
 
 	patUser, err := auth.NewUserPrincipal("user-1", "alice", auth.CredentialPAT,
-		auth.RestrictedScopes(auth.ActionRepositoryRead, auth.ActionPluginRead, auth.ActionRepositoryRead))
+		auth.RestrictedScopes(auth.ActionPluginWrite, auth.ActionPluginRead, auth.ActionPluginRead))
 	if err != nil {
 		t.Fatalf("NewUserPrincipal: %v", err)
 	}
-	if !patUser.Allows(auth.ActionRepositoryRead) || patUser.Allows(auth.ActionRepositoryWrite) {
+	if !patUser.Allows(auth.ActionPluginRead) || patUser.Allows(auth.ActionPluginPublish) {
 		t.Fatal("restricted scopes were not enforced")
 	}
 	got := patUser.Scopes().Actions()
-	if len(got) != 2 || got[0] != auth.ActionPluginRead || got[1] != auth.ActionRepositoryRead {
+	if len(got) != 2 || got[0] != auth.ActionPluginRead || got[1] != auth.ActionPluginWrite {
 		t.Fatalf("normalized scopes = %v", got)
 	}
 }
@@ -103,13 +103,16 @@ func TestApprovedActionValues(t *testing.T) {
 
 	got := []auth.Action{
 		auth.ActionMarketplaceRead,
+		auth.ActionPluginCreate,
+		auth.ActionPluginList,
 		auth.ActionPluginRead,
-		auth.ActionRepositoryRead,
-		auth.ActionRepositoryWrite,
+		auth.ActionPluginWrite,
+		auth.ActionPluginArchive,
+		auth.ActionPluginPublish,
 		auth.ActionTokenRead,
 		auth.ActionTokenWrite,
 	}
-	want := []string{"marketplace.read", "plugin.read", "repository.read", "repository.write", "token.read", "token.write"}
+	want := []string{"marketplace.read", "plugin.create", "plugin.list", "plugin.read", "plugin.write", "plugin.archive", "plugin.publish", "token.read", "token.write"}
 	for i := range got {
 		if string(got[i]) != want[i] {
 			t.Fatalf("action %d = %q, want %q", i, got[i], want[i])

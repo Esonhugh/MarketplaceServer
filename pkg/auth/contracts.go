@@ -21,14 +21,65 @@ type Action string
 
 const (
 	ActionMarketplaceRead Action = "marketplace.read"
+	ActionPluginCreate    Action = "plugin.create"
+	ActionPluginList      Action = "plugin.list"
 	ActionPluginRead      Action = "plugin.read"
-	ActionRepositoryRead  Action = "repository.read"
-	ActionRepositoryWrite Action = "repository.write"
+	ActionPluginWrite     Action = "plugin.write"
+	ActionPluginArchive   Action = "plugin.archive"
+	ActionPluginPublish   Action = "plugin.publish"
 	ActionTokenRead       Action = "token.read"
 	ActionTokenWrite      Action = "token.write"
 )
 
-// ResourceRef identifies a resource without exposing persistence models.
+const (
+	ResourceNamespace       = "namespace"
+	ResourcePlugin          = "plugin"
+	ResourceMarketplace     = "marketplace"
+	ResourceToken           = "token"
+	ResourceTokenCollection = "token_collection"
+	ResourceUser            = "user"
+)
+
+// PluginVisibility is the current authorization-relevant Plugin visibility.
+type PluginVisibility string
+
+const (
+	PluginVisibilityPublic  PluginVisibility = "public"
+	PluginVisibilityPrivate PluginVisibility = "private"
+)
+
+// PluginStatus is the current authorization-relevant Plugin lifecycle status.
+type PluginStatus string
+
+const (
+	PluginStatusDraft    PluginStatus = "draft"
+	PluginStatusActive   PluginStatus = "active"
+	PluginStatusArchived PluginStatus = "archived"
+)
+
+// RepositoryOperationalStatus is the operational status of a Plugin's hidden
+// repository. It is a fact about the Plugin aggregate, not an independent
+// authorization resource.
+type RepositoryOperationalStatus string
+
+const (
+	RepositoryOperationalReady    RepositoryOperationalStatus = "ready"
+	RepositoryOperationalReadOnly RepositoryOperationalStatus = "readOnly"
+	RepositoryOperationalError    RepositoryOperationalStatus = "error"
+)
+
+// PluginAuthorizationFacts is the value-only lifecycle and operational state
+// required to authorize a tenant-qualified Plugin. It deliberately contains no
+// persistence model, storage path, or repository identity.
+type PluginAuthorizationFacts struct {
+	Visibility       PluginVisibility
+	Status           PluginStatus
+	RepositoryStatus RepositoryOperationalStatus
+}
+
+// ResourceRef identifies a resource without exposing persistence models. A
+// namespace action targets ResourceNamespace with ID only. A Plugin action
+// other than create/list targets ResourcePlugin with both ID and NamespaceID.
 type ResourceRef struct {
 	Type        string
 	ID          string

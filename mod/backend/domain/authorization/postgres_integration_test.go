@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	distributiondomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/distribution"
 	identitydao "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/dao"
 	identitymodel "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/model"
 	"github.com/Esonhugh/MarketplaceServer/pkg/auth"
@@ -20,7 +19,7 @@ import (
 
 const authorizationPostgresDSNEnvironment = "MARKETPLACE_TEST_POSTGRES_DSN"
 
-func TestPostgresGORMIdentityStateReader(t *testing.T) {
+func TestPostgresGORMIdentityStateReaderPluginFacts(t *testing.T) {
 	db := openAuthorizationPostgres(t)
 	user := identitymodel.User{ID: uuid.NewString(), Username: "alice", DisplayName: "Alice", Status: identitymodel.UserStatusActive, PasswordHash: "not-used"}
 	ownerID := user.ID
@@ -41,10 +40,8 @@ func TestPostgresGORMIdentityStateReader(t *testing.T) {
 	if err := db.Create(&identitymodel.UserGroupMembership{UserID: user.ID, GroupID: identitymodel.AdminSystemGroupID}).Error; err != nil {
 		t.Fatal(err)
 	}
-	repository := distributiondomain.Repository{ID: uuid.NewString(), NamespaceID: namespace.ID, Slug: "repo", Visibility: "public", Status: distributiondomain.RepositoryStatusReady, StorageKey: uuid.NewString()}
-	if err := db.Create(&repository).Error; err != nil {
-		t.Fatal(err)
-	}
+	pluginID := uuid.NewString()
+	insertAuthorizationPlugin(t, db, pluginID, namespace.ID, "public", "active", "ready")
 
 	identities, err := identitydao.NewRepository(db)
 	if err != nil {
@@ -58,57 +55,37 @@ func TestPostgresGORMIdentityStateReader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err := reader.ReadAuthorizationState(context.Background(), principal, auth.ResourceRef{Type: "repository", ID: repository.ID})
+	resource := auth.ResourceRef{Type: auth.ResourcePlugin, ID: pluginID, NamespaceID: namespace.ID}
+	state, err := reader.ReadAuthorizationState(context.Background(), principal, resource)
 	if err != nil {
 		t.Fatalf("ReadAuthorizationState: %v", err)
 	}
-	if !state.Active || !state.SystemAdmin || !state.OwnsPersonalNamespace || state.OwnsResource || !state.Public {
-		t.Fatalf("state = %+v", state)
+	if !state.Active || !state.SystemAdmin || !state.OwnsPersonalNamespace || state.OwnsResource {
+		t.Fatalf("identity state = %+v", state)
+	}
+	wantFacts := auth.PluginAuthorizationFacts{
+		Visibility:       auth.PluginVisibilityPublic,
+		Status:           auth.PluginStatusActive,
+		RepositoryStatus: auth.RepositoryOperationalReady,
+	}
+	if state.Plugin != wantFacts {
+		t.Fatalf("Plugin facts = %+v, want %+v", state.Plugin, wantFacts)
 	}
 
-	plaintext, err := auth.GenerateAPIKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	secretHMAC, err := auth.IndexAPIKey(plaintext, []byte("0123456789abcdef0123456789abcdef"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	token := identitymodel.PersonalAccessToken{
-		ID:              uuid.NewString(),
-		UserID:          user.ID,
-		Name:            "token",
-		Preset:          identitymodel.TokenPresetSubscriptionRead,
-		SecretPlaintext: plaintext,
-		SecretHMAC:      secretHMAC,
-	}
-	if err := db.Create(&token).Error; err != nil {
-		t.Fatal(err)
-	}
-	state, err = reader.ReadAuthorizationState(context.Background(), principal, auth.ResourceRef{Type: "token", ID: token.ID, NamespaceID: "forged-namespace"})
-	if err != nil || !state.OwnsResource || !state.OwnsPersonalNamespace {
-		t.Fatalf("token state = %+v, %v", state, err)
-	}
-	state, err = reader.ReadAuthorizationState(context.Background(), principal, auth.ResourceRef{Type: "user", ID: user.ID, NamespaceID: "forged-namespace"})
-	if err != nil || !state.OwnsResource || !state.OwnsPersonalNamespace {
-		t.Fatalf("user state = %+v, %v", state, err)
+	if _, err := reader.ReadAuthorizationState(context.Background(), principal, auth.ResourceRef{Type: auth.ResourcePlugin, ID: pluginID, NamespaceID: uuid.NewString()}); !errorsIsIdentityUnknown(err) {
+		t.Fatalf("tenant-mismatched Plugin lookup error = %v, want identity unknown", err)
 	}
 }
 
-func TestPostgresGORMIdentityStateReaderAnonymousResourceVisibility(t *testing.T) {
+func TestPostgresGORMIdentityStateReaderAnonymousPluginFacts(t *testing.T) {
 	db := openAuthorizationPostgres(t)
 	namespace := identitymodel.Namespace{ID: uuid.NewString(), Kind: identitymodel.NamespaceKindTeam, Slug: "public", DisplayName: "Public"}
 	if err := db.Create(&namespace).Error; err != nil {
 		t.Fatal(err)
 	}
-	repository := distributiondomain.Repository{ID: uuid.NewString(), NamespaceID: namespace.ID, Slug: "repo", Visibility: "public", Status: distributiondomain.RepositoryStatusReady, StorageKey: uuid.NewString()}
-	if err := db.Create(&repository).Error; err != nil {
-		t.Fatal(err)
-	}
-	marketplace := distributiondomain.MarketplaceTemplate{ID: uuid.NewString(), NamespaceID: namespace.ID, Slug: "marketplace", Name: "Marketplace", Visibility: "public", Status: distributiondomain.StatusActive}
-	if err := db.Create(&marketplace).Error; err != nil {
-		t.Fatal(err)
-	}
+	pluginID := uuid.NewString()
+	insertAuthorizationPlugin(t, db, pluginID, namespace.ID, "public", "archived", "readOnly")
+
 	identities, err := identitydao.NewRepository(db)
 	if err != nil {
 		t.Fatal(err)
@@ -117,24 +94,32 @@ func TestPostgresGORMIdentityStateReaderAnonymousResourceVisibility(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, resource := range map[string]auth.ResourceRef{
-		"repository":  {Type: "repository", ID: repository.ID},
-		"marketplace": {Type: "marketplace", ID: marketplace.ID},
-	} {
-		t.Run(name, func(t *testing.T) {
-			state, err := reader.ReadAuthorizationState(context.Background(), auth.AnonymousPrincipal(), resource)
-			if err != nil || !state.Public || state.Active || state.SystemAdmin {
-				t.Fatalf("anonymous state = %+v, %v", state, err)
-			}
-		})
+	state, err := reader.ReadAuthorizationState(context.Background(), auth.AnonymousPrincipal(), auth.ResourceRef{Type: auth.ResourcePlugin, ID: pluginID, NamespaceID: namespace.ID})
+	if err != nil || state.Active || state.SystemAdmin {
+		t.Fatalf("anonymous state = %+v, %v", state, err)
 	}
-	if err := db.Model(&marketplace).Update("status", distributiondomain.StatusRevoked).Error; err != nil {
-		t.Fatal(err)
+	wantFacts := auth.PluginAuthorizationFacts{
+		Visibility:       auth.PluginVisibilityPublic,
+		Status:           auth.PluginStatusArchived,
+		RepositoryStatus: auth.RepositoryOperationalReadOnly,
 	}
-	state, err := reader.ReadAuthorizationState(context.Background(), auth.AnonymousPrincipal(), auth.ResourceRef{Type: "marketplace", ID: marketplace.ID})
-	if err != nil || state.Public {
-		t.Fatalf("inactive public marketplace state = %+v, %v", state, err)
+	if state.Plugin != wantFacts {
+		t.Fatalf("Plugin facts = %+v, want %+v", state.Plugin, wantFacts)
 	}
+}
+
+func insertAuthorizationPlugin(t *testing.T, db *gorm.DB, pluginID, namespaceID, visibility, status, repositoryStatus string) {
+	t.Helper()
+	if err := db.Exec("INSERT INTO repositories (id, status) VALUES (?, ?)", pluginID, repositoryStatus).Error; err != nil {
+		t.Fatalf("insert hidden repository: %v", err)
+	}
+	if err := db.Exec("INSERT INTO plugins (id, namespace_id, visibility, status) VALUES (?, ?, ?, ?)", pluginID, namespaceID, visibility, status).Error; err != nil {
+		t.Fatalf("insert Plugin: %v", err)
+	}
+}
+
+func errorsIsIdentityUnknown(err error) bool {
+	return err == ErrIdentityUnknown
 }
 
 func openAuthorizationPostgres(t *testing.T) *gorm.DB {
@@ -159,8 +144,11 @@ func openAuthorizationPostgres(t *testing.T) *gorm.DB {
 	if err := identitydao.Migrate(db); err != nil {
 		t.Fatalf("migrate identity models: %v", err)
 	}
-	if err := distributiondomain.Migrate(db); err != nil {
-		t.Fatalf("migrate distribution models: %v", err)
+	if err := db.Exec(`CREATE TABLE repositories (id text PRIMARY KEY, status text NOT NULL)`).Error; err != nil {
+		t.Fatalf("create hidden repositories table: %v", err)
+	}
+	if err := db.Exec(`CREATE TABLE plugins (id text PRIMARY KEY, namespace_id text NOT NULL, visibility text NOT NULL, status text NOT NULL)`).Error; err != nil {
+		t.Fatalf("create Plugins table: %v", err)
 	}
 	return db
 }

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	distributiondomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/distribution"
 	identitydao "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/dao"
 	identitymodel "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/model"
 	"github.com/Esonhugh/MarketplaceServer/pkg/auth"
@@ -25,12 +24,11 @@ func NewGORMIdentityStateReader(db *gorm.DB, identities *identitydao.Repository)
 }
 
 func (reader *GORMIdentityStateReader) ReadAuthorizationState(ctx context.Context, principal auth.Principal, resource auth.ResourceRef) (IdentityState, error) {
-	state := IdentityState{}
-	ownerNamespaceID, ownerUserID, public, err := reader.resourceState(ctx, resource)
+	resourceState, err := reader.resourceState(ctx, resource)
 	if err != nil {
 		return IdentityState{}, err
 	}
-	state.Public = public
+	state := IdentityState{Plugin: resourceState.plugin}
 	if principal.IsAnonymous() {
 		return state, nil
 	}
@@ -52,9 +50,9 @@ func (reader *GORMIdentityStateReader) ReadAuthorizationState(ctx context.Contex
 	if err != nil {
 		return IdentityState{}, err
 	}
-	if ownerNamespaceID != "" {
+	if resourceState.ownerNamespaceID != "" {
 		var namespace identitymodel.Namespace
-		err = reader.db.WithContext(ctx).Where("id = ?", ownerNamespaceID).Take(&namespace).Error
+		err = reader.db.WithContext(ctx).Where("id = ?", resourceState.ownerNamespaceID).Take(&namespace).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return IdentityState{}, ErrIdentityUnknown
 		}
@@ -63,48 +61,79 @@ func (reader *GORMIdentityStateReader) ReadAuthorizationState(ctx context.Contex
 		}
 		state.OwnsPersonalNamespace = namespace.Kind == identitymodel.NamespaceKindUser && namespace.OwnerUserID != nil && *namespace.OwnerUserID == user.ID
 	}
-	state.OwnsResource = ownerUserID == user.ID
+	state.OwnsResource = resourceState.ownerUserID == user.ID
 	return state, nil
 }
 
-func (reader *GORMIdentityStateReader) resourceState(ctx context.Context, resource auth.ResourceRef) (string, string, bool, error) {
+type resourceAuthorizationState struct {
+	ownerNamespaceID string
+	ownerUserID      string
+	plugin           auth.PluginAuthorizationFacts
+}
+
+func (reader *GORMIdentityStateReader) resourceState(ctx context.Context, resource auth.ResourceRef) (resourceAuthorizationState, error) {
 	switch resource.Type {
-	case "user":
+	case auth.ResourceUser:
 		namespaceID, err := reader.personalNamespaceID(ctx, resource.ID)
-		return namespaceID, resource.ID, false, err
-	case "namespace":
-		return resource.ID, "", false, nil
-	case "repository":
-		var record distributiondomain.Repository
-		if err := reader.db.WithContext(ctx).Select("namespace_id", "visibility", "status").Where("id = ?", resource.ID).Take(&record).Error; err != nil {
-			return "", "", false, mapResourceError(err)
+		return resourceAuthorizationState{ownerNamespaceID: namespaceID, ownerUserID: resource.ID}, err
+	case auth.ResourceNamespace:
+		return resourceAuthorizationState{ownerNamespaceID: resource.ID}, nil
+	case auth.ResourcePlugin:
+		return reader.pluginState(ctx, resource)
+	case auth.ResourceMarketplace:
+		var record struct {
+			NamespaceID string
 		}
-		return record.NamespaceID, "", record.Visibility == "public" && (record.Status == distributiondomain.RepositoryStatusReady || record.Status == distributiondomain.RepositoryStatusReadOnly), nil
-	case "plugin":
-		var record distributiondomain.Plugin
-		if err := reader.db.WithContext(ctx).Select("namespace_id", "visibility", "status").Where("id = ?", resource.ID).Take(&record).Error; err != nil {
-			return "", "", false, mapResourceError(err)
+		if err := reader.db.WithContext(ctx).Table("marketplace_templates").Select("namespace_id").Where("id = ?", resource.ID).Take(&record).Error; err != nil {
+			return resourceAuthorizationState{}, mapResourceError(err)
 		}
-		return record.NamespaceID, "", record.Visibility == "public" && record.Status == distributiondomain.StatusActive, nil
-	case "marketplace":
-		var record distributiondomain.MarketplaceTemplate
-		if err := reader.db.WithContext(ctx).Select("namespace_id", "visibility", "status").Where("id = ?", resource.ID).Take(&record).Error; err != nil {
-			return "", "", false, mapResourceError(err)
-		}
-		return record.NamespaceID, "", record.Visibility == "public" && record.Status == distributiondomain.StatusActive, nil
-	case "token_collection":
+		return resourceAuthorizationState{ownerNamespaceID: record.NamespaceID}, nil
+	case auth.ResourceTokenCollection:
 		namespaceID, err := reader.personalNamespaceID(ctx, resource.ID)
-		return namespaceID, resource.ID, false, err
-	case "token":
-		var token identitymodel.PersonalAccessToken
-		if err := reader.db.WithContext(ctx).Select("user_id").Where("id = ?", resource.ID).Take(&token).Error; err != nil {
-			return "", "", false, mapResourceError(err)
+		return resourceAuthorizationState{ownerNamespaceID: namespaceID, ownerUserID: resource.ID}, err
+	case auth.ResourceToken:
+		var token struct {
+			UserID string
+		}
+		if err := reader.db.WithContext(ctx).Table("personal_access_tokens").Select("user_id").Where("id = ?", resource.ID).Take(&token).Error; err != nil {
+			return resourceAuthorizationState{}, mapResourceError(err)
 		}
 		namespaceID, err := reader.personalNamespaceID(ctx, token.UserID)
-		return namespaceID, token.UserID, false, err
+		return resourceAuthorizationState{ownerNamespaceID: namespaceID, ownerUserID: token.UserID}, err
 	default:
-		return "", "", false, ErrIdentityUnknown
+		return resourceAuthorizationState{}, ErrIdentityUnknown
 	}
+}
+
+func (reader *GORMIdentityStateReader) pluginState(ctx context.Context, resource auth.ResourceRef) (resourceAuthorizationState, error) {
+	if resource.ID == "" || resource.NamespaceID == "" {
+		return resourceAuthorizationState{}, ErrIdentityUnknown
+	}
+	var record struct {
+		NamespaceID      string
+		Visibility       string
+		Status           string
+		RepositoryStatus string
+	}
+	// Plugin is the aggregate and policy root. The hidden repository is joined
+	// only to obtain its operational fact; it is never addressed as a resource.
+	err := reader.db.WithContext(ctx).
+		Table("plugins AS plugin").
+		Select("plugin.namespace_id, plugin.visibility, plugin.status, repository.status AS repository_status").
+		Joins("JOIN repositories AS repository ON repository.id = plugin.id").
+		Where("plugin.id = ? AND plugin.namespace_id = ?", resource.ID, resource.NamespaceID).
+		Take(&record).Error
+	if err != nil {
+		return resourceAuthorizationState{}, mapResourceError(err)
+	}
+	return resourceAuthorizationState{
+		ownerNamespaceID: record.NamespaceID,
+		plugin: auth.PluginAuthorizationFacts{
+			Visibility:       auth.PluginVisibility(record.Visibility),
+			Status:           auth.PluginStatus(record.Status),
+			RepositoryStatus: auth.RepositoryOperationalStatus(record.RepositoryStatus),
+		},
+	}, nil
 }
 
 func (reader *GORMIdentityStateReader) personalNamespaceID(ctx context.Context, userID string) (string, error) {
