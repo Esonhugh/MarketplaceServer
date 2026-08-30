@@ -13,8 +13,11 @@ import (
 	distributiondomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/distribution"
 	identitymodel "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/model"
 	identityservice "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/service"
+	plugindomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/plugin"
+	pluginreceive "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/plugin/receive"
 	distributionhandler "github.com/Esonhugh/MarketplaceServer/mod/backend/handler/distribution"
 	identityhandler "github.com/Esonhugh/MarketplaceServer/mod/backend/handler/identity"
+	pluginhandler "github.com/Esonhugh/MarketplaceServer/mod/backend/handler/plugin"
 	"github.com/Esonhugh/MarketplaceServer/pkg/api"
 	"github.com/Esonhugh/MarketplaceServer/pkg/auth"
 	"github.com/Esonhugh/MarketplaceServer/pkg/distributionservice"
@@ -49,6 +52,8 @@ type Mod struct {
 	loginService           *identityservice.LoginService
 	managementAuth         identityhandler.ManagementAuthenticator
 	subscriptionPAT        auth.SubscriptionPATAuthenticator
+	pluginLifecycle        pluginhandler.Lifecycle
+	receiveCoordinator     gitservice.ReceiveCoordinator
 	environment            identitymodel.Environment
 	initializeIdentity     func(context.Context, *gorm.DB, identitymodel.Environment, string) (identityservice.Services, error)
 	migrate                func(*gorm.DB) error
@@ -90,6 +95,22 @@ func (m *Mod) PostInit(hub *kernel.Hub) error {
 	}
 	if isNil(projectionBuilder) {
 		return fmt.Errorf("backend dependency gitservice.ProjectionBuilder not available: nil")
+	}
+
+	var repositoryProvisioner gitservice.RepositoryProvisioner
+	if err := hub.Load(&repositoryProvisioner); err != nil {
+		return fmt.Errorf("backend dependency gitservice.RepositoryProvisioner not available: %w", err)
+	}
+	if isNil(repositoryProvisioner) {
+		return fmt.Errorf("backend dependency gitservice.RepositoryProvisioner not available: nil")
+	}
+
+	var pluginSourceInspector gitservice.PluginSourceInspector
+	if err := hub.Load(&pluginSourceInspector); err != nil {
+		return fmt.Errorf("backend dependency gitservice.PluginSourceInspector not available: %w", err)
+	}
+	if isNil(pluginSourceInspector) {
+		return fmt.Errorf("backend dependency gitservice.PluginSourceInspector not available: nil")
 	}
 
 	environment := m.environment
@@ -136,6 +157,25 @@ func (m *Mod) PostInit(hub *kernel.Hub) error {
 	if err != nil {
 		return fmt.Errorf("assemble token service: %w", err)
 	}
+	pluginService, err := plugindomain.NewService(db, authorizer, repositoryProvisioner, pluginSourceInspector)
+	if err != nil {
+		return fmt.Errorf("assemble plugin lifecycle service: %w", err)
+	}
+	pluginLifecycle := m.pluginLifecycle
+	if isNil(pluginLifecycle) {
+		pluginLifecycle = pluginhandler.NewDomainLifecycleAdapter(pluginService)
+	}
+	if isNil(pluginLifecycle) {
+		return fmt.Errorf("assemble plugin lifecycle handler adapter: domain lifecycle service is incomplete")
+	}
+	receiveCoordinator := m.receiveCoordinator
+	if isNil(receiveCoordinator) {
+		coordinator, err := pluginreceive.NewCoordinator(db, projectionBuilder, pluginreceive.Options{})
+		if err != nil {
+			return fmt.Errorf("assemble plugin receive coordinator: %w", err)
+		}
+		receiveCoordinator = coordinator
+	}
 
 	accessService := distributiondomain.NewAccessService(distributionRepository)
 	publicationService := distributiondomain.NewPublicationService(distributionRepository, projectionBuilder)
@@ -157,11 +197,14 @@ func (m *Mod) PostInit(hub *kernel.Hub) error {
 	m.loginService = identityServices.Login
 	m.managementAuth = identityhandler.NewManagementAuthenticator(identityServices.JWT, identityServices.Account)
 	m.subscriptionPAT = identityServices.SubscriptionPAT
+	m.pluginLifecycle = pluginLifecycle
+	m.receiveCoordinator = receiveCoordinator
 	var repositoryResolver gitservice.RepositoryResolver = m
 	var distributionResolver distributionservice.Resolver = accessService
 	var gitPATAuthenticator auth.GitPATAuthenticator = identityServices.GitPAT
 	var policyAuthorizer auth.Authorizer = authorizer
-	hub.Map(&repositoryResolver, &distributionResolver, &gitPATAuthenticator, &policyAuthorizer)
+	var protectedReceive gitservice.ReceiveCoordinator = receiveCoordinator
+	hub.Map(&repositoryResolver, &distributionResolver, &gitPATAuthenticator, &policyAuthorizer, &protectedReceive)
 	return nil
 }
 
@@ -172,28 +215,29 @@ func (m *Mod) Resolve(ctx context.Context, namespace, repository string) (gitser
 	return m.resolveRepository(ctx, namespace, repository)
 }
 
-func (m *Mod) resolveRepository(ctx context.Context, namespaceSlug, repositorySlug string) (gitservice.Repository, error) {
-	// Resolve through the namespace relation rather than by repository slug alone.
-	// Visibility and status intentionally remain unfiltered here: transport policy
-	// must decide whether this resolved resource is readable or writable.
+func (m *Mod) resolveRepository(ctx context.Context, namespaceSlug, pluginSlug string) (gitservice.Repository, error) {
+	// The Git route resolves the Plugin aggregate. The hidden Repository contributes
+	// only its shared storage identity and operational status.
 	var row struct {
 		ID          string
 		NamespaceID string
 		OwnerUserID *string
+		Slug        string
 		Visibility  string
 		Status      string
 	}
 	err := m.db.WithContext(ctx).
-		Table("repositories").
-		Select("repositories.id, repositories.namespace_id, namespaces.owner_user_id, repositories.visibility, repositories.status").
-		Joins("JOIN namespaces ON namespaces.id = repositories.namespace_id").
-		Where("namespaces.slug = ? AND repositories.slug = ?", namespaceSlug, repositorySlug).
+		Table("plugins").
+		Select("plugins.id, plugins.namespace_id, namespaces.owner_user_id, plugins.slug, plugins.visibility, repositories.status").
+		Joins("JOIN repositories ON repositories.id = plugins.id").
+		Joins("JOIN namespaces ON namespaces.id = plugins.namespace_id").
+		Where("namespaces.slug = ? AND plugins.slug = ?", namespaceSlug, pluginSlug).
 		Take(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return gitservice.Repository{}, gitservice.ErrRepositoryNotFound
 	}
 	if err != nil {
-		return gitservice.Repository{}, fmt.Errorf("%w: resolve development repository metadata: %v", gitservice.ErrRepositoryUnavailable, err)
+		return gitservice.Repository{}, fmt.Errorf("%w: resolve Plugin repository metadata: %v", gitservice.ErrRepositoryUnavailable, err)
 	}
 	ownerUserID := ""
 	if row.OwnerUserID != nil {
@@ -203,6 +247,7 @@ func (m *Mod) resolveRepository(ctx context.Context, namespaceSlug, repositorySl
 		ID:          row.ID,
 		NamespaceID: row.NamespaceID,
 		OwnerUserID: ownerUserID,
+		Slug:        row.Slug,
 		Visibility:  row.Visibility,
 		Status:      row.Status,
 	}, nil
@@ -210,7 +255,7 @@ func (m *Mod) resolveRepository(ctx context.Context, namespaceSlug, repositorySl
 
 func (m *Mod) Load(_ *kernel.Hub) error {
 	if m.jin == nil || m.db == nil || isNil(m.git) || m.tokenService == nil || m.loginService == nil ||
-		m.userMarketplaceService == nil || isNil(m.managementAuth) || isNil(m.subscriptionPAT) {
+		m.userMarketplaceService == nil || isNil(m.managementAuth) || isNil(m.subscriptionPAT) || isNil(m.pluginLifecycle) || isNil(m.receiveCoordinator) {
 		return fmt.Errorf("backend dependencies are not assembled; call PostInit after jin, sql, and git dependencies are mapped")
 	}
 
@@ -220,6 +265,7 @@ func (m *Mod) Load(_ *kernel.Hub) error {
 		distributionhandler.NewUserMarketplaceJSONHandler(m.subscriptionPAT, m.userMarketplaceService).Register(m.jin)
 		identityhandler.NewLoginHandler(m.loginService).Register(m.jin)
 		identityhandler.NewTokenHandler(m.tokenService, m.managementAuth).Register(m.jin)
+		pluginhandler.NewHandler(m.pluginLifecycle, m.managementAuth).Register(m.jin)
 	})
 	return nil
 }

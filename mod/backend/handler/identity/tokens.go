@@ -5,16 +5,16 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	identityservice "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/service"
+	managementhandler "github.com/Esonhugh/MarketplaceServer/mod/backend/handler/management"
 	"github.com/Esonhugh/MarketplaceServer/pkg/auth"
 	"github.com/google/uuid"
 	"github.com/juanjiTech/jin"
 )
 
-const bearerChallenge = `Bearer realm="MarketplaceServer Management"`
+const bearerChallenge = managementhandler.BearerChallenge
 
 type ManagementAuthenticator interface {
 	AuthenticateBearer(context.Context, string) (auth.Principal, error)
@@ -150,20 +150,7 @@ func (handler *TokenHandler) Reveal(c *jin.Context) {
 }
 
 func (handler *TokenHandler) authenticate(c *jin.Context) (auth.Principal, bool) {
-	header := c.Request.Header.Get("Authorization")
-	parts := strings.Fields(header)
-	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
-		c.Writer.Header().Set("WWW-Authenticate", bearerChallenge)
-		renderAPIError(c, http.StatusUnauthorized, "unauthenticated", "authentication is required")
-		return auth.Principal{}, false
-	}
-	principal, err := handler.authenticator.AuthenticateBearer(c.Request.Context(), parts[1])
-	if err != nil || !principal.IsUser() || principal.CredentialKind() != auth.CredentialJWT {
-		c.Writer.Header().Set("WWW-Authenticate", bearerChallenge)
-		renderAPIError(c, http.StatusUnauthorized, "unauthenticated", "authentication is required")
-		return auth.Principal{}, false
-	}
-	return principal, true
+	return managementhandler.AuthenticateRequired(c, handler.authenticator)
 }
 
 func (handler *TokenHandler) renderServiceError(c *jin.Context, err error) {
@@ -217,6 +204,5 @@ func createdTokenResponse(created identityservice.CreatedToken) struct {
 }
 
 func setSecretCacheHeaders(c *jin.Context) {
-	c.Writer.Header().Set("Cache-Control", "private, no-store")
-	c.Writer.Header().Set("Pragma", "no-cache")
+	managementhandler.SetSecretCacheHeaders(c)
 }

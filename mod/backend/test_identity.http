@@ -5,6 +5,9 @@
 @tokenId = 00000000-0000-0000-0000-000000000000
 @pat = mpsk_replace-with-personal-access-token
 @marketplaceKey = replace-with-marketplace-public-key
+@namespace = admin
+@plugin = example-plugin
+@versionTag = v1.0.0
 
 ### Health
 GET {{baseUrl}}/api/v1/health
@@ -73,6 +76,73 @@ Content-Type: application/json
 
 ### Revoke personal access token
 DELETE {{baseUrl}}/api/v1/me/tokens/{{tokenId}}
+Authorization: Bearer {{jwt}}
+
+### List Plugins
+GET {{baseUrl}}/api/v1/namespaces/{{namespace}}/plugins?page=1&size=20
+Accept: application/json
+Authorization: Bearer {{jwt}}
+
+### Create Plugin
+POST {{baseUrl}}/api/v1/namespaces/{{namespace}}/plugins
+Accept: application/json
+Authorization: Bearer {{jwt}}
+Content-Type: application/json
+
+{
+  "name": "{{plugin}}",
+  "visibility": "public"
+}
+
+### Get Plugin
+GET {{baseUrl}}/api/v1/namespaces/{{namespace}}/plugins/{{plugin}}
+Accept: application/json
+Authorization: Bearer {{jwt}}
+
+### Set Plugin private
+POST {{baseUrl}}/api/v1/namespaces/{{namespace}}/plugins/{{plugin}}:set-visibility
+Authorization: Bearer {{jwt}}
+Content-Type: application/json
+
+{
+  "visibility": "private"
+}
+
+### Publish existing canonical tag
+POST {{baseUrl}}/api/v1/namespaces/{{namespace}}/plugins/{{plugin}}/versions:publish
+Accept: application/json
+Authorization: Bearer {{jwt}}
+Content-Type: application/json
+
+{
+  "tag": "{{versionTag}}",
+  "makeDefault": true
+}
+
+### List available Plugin versions
+GET {{baseUrl}}/api/v1/namespaces/{{namespace}}/plugins/{{plugin}}/versions?page=1&size=20
+Accept: application/json
+Authorization: Bearer {{jwt}}
+
+### Get exact Plugin version
+GET {{baseUrl}}/api/v1/namespaces/{{namespace}}/plugins/{{plugin}}/versions/{{versionTag}}
+Accept: application/json
+Authorization: Bearer {{jwt}}
+
+### Set default Plugin version
+POST {{baseUrl}}/api/v1/namespaces/{{namespace}}/plugins/{{plugin}}/versions/{{versionTag}}:set-default
+Authorization: Bearer {{jwt}}
+
+### Clear default Plugin version
+DELETE {{baseUrl}}/api/v1/namespaces/{{namespace}}/plugins/{{plugin}}/default-version
+Authorization: Bearer {{jwt}}
+
+### Archive Plugin
+POST {{baseUrl}}/api/v1/namespaces/{{namespace}}/plugins/{{plugin}}:archive
+Authorization: Bearer {{jwt}}
+
+### Restore Plugin
+POST {{baseUrl}}/api/v1/namespaces/{{namespace}}/plugins/{{plugin}}:restore
 Authorization: Bearer {{jwt}}
 
 ### Read authenticated user Marketplace

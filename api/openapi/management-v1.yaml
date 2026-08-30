@@ -9,10 +9,10 @@ info:
     Authoritative wire contract for currently implemented management operations
     under `/api/v1`.
 
-    This document contains only deployed login, health, and current-user personal
-    access token operations. Future Plugin, Marketplace, team, and distribution
-    credential management paths remain in `management-v1-design.yaml` and are not
-    evidence of runtime availability.
+    This document contains deployed login, health, current-user personal access
+    token, Plugin lifecycle, and Plugin Version operations. Future Marketplace,
+    team, and distribution credential management paths remain in
+    `management-v1-design.yaml` and are not evidence of runtime availability.
 
     Git Smart HTTP, distribution endpoints, frontend routes, and the external
     Claude Code `marketplace.json` schema are outside this contract.
@@ -30,6 +30,10 @@ tags:
     description: Management-plane process health.
   - name: Personal access tokens
     description: Personal access token lifecycle for the authenticated user.
+  - name: Plugins
+    description: User-facing Plugins backed by hidden one-to-one Git repositories.
+  - name: Plugin versions
+    description: Canonical tag-driven Plugin publication.
 
 paths:
   /api/v1/auth/login:
@@ -229,6 +233,333 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /api/v1/namespaces/{namespace}/plugins:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+    get:
+      operationId: listPlugins
+      tags: [Plugins]
+      summary: List readable Plugins in a namespace
+      security:
+        - BearerJWT: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: Stable namespace-scoped Plugin page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginPageSuccess"
+        "401":
+          $ref: "#/components/responses/BearerUnauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    post:
+      operationId: createPlugin
+      tags: [Plugins]
+      summary: Create a Plugin and its hidden shared-ID repository
+      description: |
+        The lowercase kebab-case name is the immutable Plugin slug and Git path.
+        Visibility defaults to public. A 201 is synchronous and is returned only
+        after the same-UUID hidden bare repository is initialized with symbolic
+        HEAD pointing to main and both aggregate SQL rows are ready. SQL and Git
+        remain separate atomic boundaries with explicit compensation.
+      security:
+        - BearerJWT: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePluginRequest"
+      responses:
+        "201":
+          description: Draft Plugin and hidden Repository aggregate created and ready.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginSuccess"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/BearerUnauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/namespaces/{namespace}/plugins/{plugin}:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+      - $ref: "#/components/parameters/PluginSlug"
+    get:
+      operationId: getPlugin
+      tags: [Plugins]
+      summary: Get Plugin metadata
+      security:
+        - {}
+        - BearerJWT: []
+      responses:
+        "200":
+          description: Exact public active/archived metadata is anonymous; draft/private require authorization.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginSuccess"
+        "401":
+          $ref: "#/components/responses/BearerUnauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/namespaces/{namespace}/plugins/{plugin}:archive:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+      - $ref: "#/components/parameters/PluginSlug"
+    post:
+      operationId: archivePlugin
+      tags: [Plugins]
+      summary: Archive a Plugin idempotently
+      security:
+        - BearerJWT: []
+      responses:
+        "204":
+          description: Plugin is archived or was already archived; no body.
+        "401":
+          $ref: "#/components/responses/BearerUnauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/namespaces/{namespace}/plugins/{plugin}:restore:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+      - $ref: "#/components/parameters/PluginSlug"
+    post:
+      operationId: restorePlugin
+      tags: [Plugins]
+      summary: Restore an archived Plugin to its prior lifecycle state
+      security:
+        - BearerJWT: []
+      responses:
+        "204":
+          description: Plugin restored to its recorded draft or active state; no body.
+        "401":
+          $ref: "#/components/responses/BearerUnauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/namespaces/{namespace}/plugins/{plugin}:set-visibility:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+      - $ref: "#/components/parameters/PluginSlug"
+    post:
+      operationId: setPluginVisibility
+      tags: [Plugins]
+      summary: Set current Plugin visibility idempotently
+      description: Existing Marketplace index configuration is not rewritten; current content access always re-evaluates plugin.read.
+      security:
+        - BearerJWT: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetPluginVisibilityRequest"
+      responses:
+        "204":
+          description: Visibility set or already equal; no body.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/BearerUnauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/namespaces/{namespace}/plugins/{plugin}/versions:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+      - $ref: "#/components/parameters/PluginSlug"
+    get:
+      operationId: listPluginVersions
+      tags: [Plugin versions]
+      summary: List available logical tag Versions
+      security:
+        - BearerJWT: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: Stable page excluding deleted tombstones.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginVersionPageSuccess"
+        "401":
+          $ref: "#/components/responses/BearerUnauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/namespaces/{namespace}/plugins/{plugin}/versions:publish:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+      - $ref: "#/components/parameters/PluginSlug"
+    post:
+      operationId: publishPluginVersion
+      tags: [Plugin versions]
+      summary: Publish an existing canonical v-prefixed SemVer tag
+      description: |
+        Strictly revalidates the current canonical tag, exact manifest name and
+        full SHA. CAS publication creates or restores the same logical Plugin+tag
+        Version. The first successful publish activates a draft Plugin.
+      security:
+        - BearerJWT: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PublishPluginVersionRequest"
+      responses:
+        "201":
+          description: Logical Version published at its CAS-verified current SHA.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginVersionSuccess"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/BearerUnauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/namespaces/{namespace}/plugins/{plugin}/versions/{tag}:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+      - $ref: "#/components/parameters/PluginSlug"
+      - $ref: "#/components/parameters/TagName"
+    get:
+      operationId: getPluginVersion
+      tags: [Plugin versions]
+      summary: Get an exact logical Version
+      security:
+        - {}
+        - BearerJWT: []
+      responses:
+        "200":
+          description: Available Version metadata under current Plugin visibility.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginVersionSuccess"
+        "401":
+          $ref: "#/components/responses/BearerUnauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "410":
+          $ref: "#/components/responses/Gone"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/namespaces/{namespace}/plugins/{plugin}/versions/{tag}:set-default:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+      - $ref: "#/components/parameters/PluginSlug"
+      - $ref: "#/components/parameters/TagName"
+    post:
+      operationId: setDefaultPluginVersion
+      tags: [Plugin versions]
+      summary: Set the owner-selected default Version
+      security:
+        - BearerJWT: []
+      responses:
+        "204":
+          description: Available tag is now default or already was; no body.
+        "401":
+          $ref: "#/components/responses/BearerUnauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/namespaces/{namespace}/plugins/{plugin}/default-version:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+      - $ref: "#/components/parameters/PluginSlug"
+    delete:
+      operationId: clearDefaultPluginVersion
+      tags: [Plugin versions]
+      summary: Clear the owner-selected default Version idempotently
+      security:
+        - BearerJWT: []
+      responses:
+        "204":
+          description: Default is clear or was already empty; no body.
+        "401":
+          $ref: "#/components/responses/BearerUnauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
 components:
   securitySchemes:
     BearerJWT:
@@ -268,6 +599,24 @@ components:
       schema:
         $ref: "#/components/schemas/UUID"
 
+    Namespace:
+      name: namespace
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/Slug"
+    PluginSlug:
+      name: plugin
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/Slug"
+    TagName:
+      name: tag
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/CanonicalVersionTag"
   headers:
     RequestId:
       description: Framework-generated ULID matching the error body's requestId.
@@ -373,6 +722,33 @@ components:
             code: not_found
             message: token not found
             requestId: 01J51X8R6M4B9D5VYN2Q3H7KCT
+    NotFound:
+      description: The scoped resource was not found or is intentionally not disclosed.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/RequestId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: The resource state, version, or unique identity conflicts with the command.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/RequestId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Gone:
+      description: The authorized exact logical Version is retained only as a deleted tombstone; no deleted metadata is disclosed.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/RequestId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
     ValidationFailed:
       description: Query syntax or token input violates the documented constraints.
       headers:
@@ -411,6 +787,20 @@ components:
       type: string
       format: date-time
       description: RFC 3339 timestamp.
+
+    Slug:
+      type: string
+      minLength: 1
+      maxLength: 63
+      pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    CommitSHA:
+      type: string
+      pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+      description: Full peeled commit object ID in the repository object format.
+    CanonicalVersionTag:
+      type: string
+      pattern: "^v(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+      description: Canonical v-prefixed SemVer tag.
 
     Error:
       type: object
@@ -614,6 +1004,98 @@ components:
         data:
           $ref: "#/components/schemas/RevealedToken"
 
+    PluginStatus:
+      type: string
+      enum: [draft, active, archived]
+      description: First successful Version publish activates draft; archive is explicitly reversible.
+    PluginVisibility:
+      type: string
+      enum: [public, private]
+    RepositoryStatus:
+      type: string
+      enum: [ready, readOnly, error]
+      description: Safe operational state of the mandatory hidden same-ID Repository.
+    Plugin:
+      type: object
+      required: [namespace, name, status, visibility, repositoryStatus, cloneUrl, defaultVersion, createdAt, updatedAt]
+      properties:
+        namespace:
+          $ref: "#/components/schemas/Slug"
+        name:
+          $ref: "#/components/schemas/Slug"
+        status:
+          $ref: "#/components/schemas/PluginStatus"
+        visibility:
+          $ref: "#/components/schemas/PluginVisibility"
+        repositoryStatus:
+          $ref: "#/components/schemas/RepositoryStatus"
+        cloneUrl:
+          type: string
+          pattern: "^/git/[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9]+(?:-[a-z0-9]+)*\\.git$"
+          description: Same-origin relative development Git URL; no Repository ID or storage detail.
+        defaultVersion:
+          oneOf:
+            - $ref: "#/components/schemas/CanonicalVersionTag"
+            - type: "null"
+        createdAt:
+          $ref: "#/components/schemas/Timestamp"
+        updatedAt:
+          $ref: "#/components/schemas/Timestamp"
+    CreatePluginRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          $ref: "#/components/schemas/Slug"
+        visibility:
+          $ref: "#/components/schemas/PluginVisibility"
+    SetPluginVisibilityRequest:
+      type: object
+      required: [visibility]
+      properties:
+        visibility:
+          $ref: "#/components/schemas/PluginVisibility"
+    PluginSuccess:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/Plugin"
+
+    PluginVersionStatus:
+      type: string
+      const: available
+      description: Deleted logical Versions are omitted from lists and return a 410 error for an authorized exact query.
+    PluginVersion:
+      type: object
+      required: [tag, status, commitSha, publishedAt, updatedAt]
+      properties:
+        tag:
+          $ref: "#/components/schemas/CanonicalVersionTag"
+        status:
+          $ref: "#/components/schemas/PluginVersionStatus"
+        commitSha:
+          $ref: "#/components/schemas/CommitSHA"
+        publishedAt:
+          $ref: "#/components/schemas/Timestamp"
+        updatedAt:
+          $ref: "#/components/schemas/Timestamp"
+    PublishPluginVersionRequest:
+      type: object
+      required: [tag]
+      properties:
+        tag:
+          $ref: "#/components/schemas/CanonicalVersionTag"
+        makeDefault:
+          type: boolean
+          default: false
+    PluginVersionSuccess:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/PluginVersion"
+
     PageMeta:
       type: object
       additionalProperties: false
@@ -652,6 +1134,26 @@ components:
           format: int64
           minimum: 0
 
+    PluginPageData:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/Plugin"
+    PluginVersionPageData:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/PluginVersion"
     TokenPageSuccess:
       type: object
       additionalProperties: false
@@ -659,3 +1161,15 @@ components:
       properties:
         data:
           $ref: "#/components/schemas/TokenPageData"
+    PluginPageSuccess:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/PluginPageData"
+    PluginVersionPageSuccess:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/PluginVersionPageData"

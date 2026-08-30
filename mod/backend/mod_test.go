@@ -8,16 +8,21 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Esonhugh/MarketplaceServer/core/kernel"
 	identitydao "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/dao"
 	identitymodel "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/model"
 	identityservice "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/service"
+	plugindomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/plugin"
+	pluginhandler "github.com/Esonhugh/MarketplaceServer/mod/backend/handler/plugin"
 	"github.com/Esonhugh/MarketplaceServer/pkg/auth"
 	"github.com/Esonhugh/MarketplaceServer/pkg/gitservice"
+	"github.com/google/uuid"
 	"github.com/juanjiTech/inject/v2"
 	"github.com/juanjiTech/jin"
 	"go.uber.org/zap"
+	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -104,6 +109,44 @@ func TestPostInitRejectsTypedNilRepositoryService(t *testing.T) {
 	}
 }
 
+func TestPostInitRequiresPluginLifecycleGitDependencies(t *testing.T) {
+	base := func(hub *kernel.Hub) {
+		engine := jin.New()
+		db := &gorm.DB{}
+		repoSvc := gitservice.RepositoryService(&fakeRepositoryService{})
+		projectionBuilder := gitservice.ProjectionBuilder(&fakeProjectionBuilder{})
+		hub.Map(&engine, &db, &repoSvc, &projectionBuilder)
+	}
+	for _, test := range []struct {
+		name    string
+		arrange func(*kernel.Hub)
+		wantErr string
+	}{
+		{
+			name:    "missing repository provisioner",
+			arrange: base,
+			wantErr: "backend dependency gitservice.RepositoryProvisioner",
+		},
+		{
+			name: "missing plugin source inspector",
+			arrange: func(hub *kernel.Hub) {
+				base(hub)
+				provisioner := gitservice.RepositoryProvisioner(&fakeRepositoryProvisioner{})
+				hub.Map(&provisioner)
+			},
+			wantErr: "backend dependency gitservice.PluginSourceInspector",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			hub := newTestHub()
+			test.arrange(hub)
+			if err := testMod().PostInit(hub); err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("PostInit() error = %v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestPostInitStopsBeforeAssemblyWhenMigrationFails(t *testing.T) {
 	hub := newTestHub()
 	engine := jin.New()
@@ -111,7 +154,9 @@ func TestPostInitStopsBeforeAssemblyWhenMigrationFails(t *testing.T) {
 	gitSvc := &fakeRepositoryService{}
 	repoSvc := gitservice.RepositoryService(gitSvc)
 	projectionBuilder := gitservice.ProjectionBuilder(&fakeProjectionBuilder{})
-	hub.Map(&engine, &db, &repoSvc, &projectionBuilder)
+	repositoryProvisioner := gitservice.RepositoryProvisioner(&fakeRepositoryProvisioner{})
+	pluginSourceInspector := gitservice.PluginSourceInspector(&fakePluginSourceInspector{})
+	hub.Map(&engine, &db, &repoSvc, &projectionBuilder, &repositoryProvisioner, &pluginSourceInspector)
 
 	m := &Mod{config: Config{JWTSecret: "test JWT secret"}, migrate: func(*gorm.DB) error { return errors.New("migration failed") }}
 	err := m.PostInit(hub)
@@ -134,7 +179,9 @@ func TestPostInitAssemblesDependencies(t *testing.T) {
 	gitSvc := &fakeRepositoryService{}
 	repoSvc := gitservice.RepositoryService(gitSvc)
 	projectionBuilder := gitservice.ProjectionBuilder(&fakeProjectionBuilder{})
-	hub.Map(&engine, &db, &repoSvc, &projectionBuilder)
+	repositoryProvisioner := gitservice.RepositoryProvisioner(&fakeRepositoryProvisioner{})
+	pluginSourceInspector := gitservice.PluginSourceInspector(&fakePluginSourceInspector{})
+	hub.Map(&engine, &db, &repoSvc, &projectionBuilder, &repositoryProvisioner, &pluginSourceInspector)
 
 	m := testMod()
 	if err := m.PostInit(hub); err != nil {
@@ -160,6 +207,53 @@ func TestPostInitAssemblesDependencies(t *testing.T) {
 	}
 	if repository, err := resolver.Resolve(context.Background(), "team-a", "plugin-one"); !errors.Is(err, gitservice.ErrRepositoryUnavailable) || repository != (gitservice.Repository{}) {
 		t.Fatalf("fail-closed resolver Resolve() = (%#v, %v), want zero repository and unavailable", repository, err)
+	}
+}
+
+func TestResolveUsesSharedIDPluginAggregateAndTenantScope(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:"+uuid.NewString()+"?mode=memory&cache=shared&_foreign_keys=on"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&identitymodel.User{}, &identitymodel.Namespace{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := plugindomain.Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	for _, namespace := range []identitymodel.Namespace{
+		{ID: uuid.NewString(), Kind: identitymodel.NamespaceKindTeam, Slug: "team-a", DisplayName: "Team A", CreatedAt: now, UpdatedAt: now},
+		{ID: uuid.NewString(), Kind: identitymodel.NamespaceKindTeam, Slug: "team-b", DisplayName: "Team B", CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := db.Create(&namespace).Error; err != nil {
+			t.Fatal(err)
+		}
+		pluginID := uuid.NewString()
+		if err := db.Create(&plugindomain.Plugin{ID: pluginID, NamespaceID: namespace.ID, Slug: "scanner", Visibility: plugindomain.VisibilityPublic, Status: plugindomain.PluginStatusActive, CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Create(&plugindomain.Repository{ID: pluginID, StorageKey: pluginID, Status: plugindomain.RepositoryStatusReady, CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := &Mod{db: db, git: &fakeRepositoryService{}}
+	resolved, err := m.Resolve(context.Background(), "team-b", "scanner")
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if resolved.NamespaceID == "" || resolved.Status != plugindomain.RepositoryStatusReady || resolved.Visibility != plugindomain.VisibilityPublic {
+		t.Fatalf("Resolve() = %#v", resolved)
+	}
+	var repository plugindomain.Repository
+	if err := db.Where("id = ?", resolved.ID).Take(&repository).Error; err != nil {
+		t.Fatal(err)
+	}
+	if repository.ID != resolved.ID || repository.StorageKey != resolved.ID {
+		t.Fatalf("shared aggregate = %#v/%#v", resolved, repository)
+	}
+	if _, err := m.Resolve(context.Background(), "team-c", "scanner"); !errors.Is(err, gitservice.ErrRepositoryNotFound) {
+		t.Fatalf("cross-tenant Resolve() error = %v, want not found", err)
 	}
 }
 
@@ -195,7 +289,9 @@ func TestLoadRegistersBackendHealthEndpoint(t *testing.T) {
 	gitSvc := &fakeRepositoryService{}
 	repoSvc := gitservice.RepositoryService(gitSvc)
 	projectionBuilder := gitservice.ProjectionBuilder(&fakeProjectionBuilder{})
-	hub.Map(&engine, &db, &repoSvc, &projectionBuilder)
+	repositoryProvisioner := gitservice.RepositoryProvisioner(&fakeRepositoryProvisioner{})
+	pluginSourceInspector := gitservice.PluginSourceInspector(&fakePluginSourceInspector{})
+	hub.Map(&engine, &db, &repoSvc, &projectionBuilder, &repositoryProvisioner, &pluginSourceInspector)
 
 	m := testMod()
 	if err := m.PostInit(hub); err != nil {
@@ -246,7 +342,9 @@ func TestLoadFailsFastWithoutAssemblyAndIsIdempotent(t *testing.T) {
 		gitSvc := &fakeRepositoryService{}
 		repoSvc := gitservice.RepositoryService(gitSvc)
 		projectionBuilder := gitservice.ProjectionBuilder(&fakeProjectionBuilder{})
-		hub.Map(&engine, &db, &repoSvc, &projectionBuilder)
+		repositoryProvisioner := gitservice.RepositoryProvisioner(&fakeRepositoryProvisioner{})
+		pluginSourceInspector := gitservice.PluginSourceInspector(&fakePluginSourceInspector{})
+		hub.Map(&engine, &db, &repoSvc, &projectionBuilder, &repositoryProvisioner, &pluginSourceInspector)
 
 		m := testMod()
 		if err := m.PostInit(hub); err != nil {
@@ -284,7 +382,9 @@ func TestLoadFailsFastWithoutAssemblyAndIsIdempotent(t *testing.T) {
 		gitSvc := &fakeRepositoryService{}
 		repoSvc := gitservice.RepositoryService(gitSvc)
 		projectionBuilder := gitservice.ProjectionBuilder(&fakeProjectionBuilder{})
-		hub.Map(&engine, &db, &repoSvc, &projectionBuilder)
+		repositoryProvisioner := gitservice.RepositoryProvisioner(&fakeRepositoryProvisioner{})
+		pluginSourceInspector := gitservice.PluginSourceInspector(&fakePluginSourceInspector{})
+		hub.Map(&engine, &db, &repoSvc, &projectionBuilder, &repositoryProvisioner, &pluginSourceInspector)
 
 		m := testMod()
 		if err := m.PostInit(hub); err != nil {
@@ -306,11 +406,47 @@ func TestLoadFailsFastWithoutAssemblyAndIsIdempotent(t *testing.T) {
 	})
 }
 
+func TestLoadRegistersPluginLifecycleRoutesAndRejectsInvalidBearer(t *testing.T) {
+	hub := newTestHub()
+	engine := jin.New()
+	db := &gorm.DB{}
+	repoSvc := gitservice.RepositoryService(&fakeRepositoryService{})
+	projectionBuilder := gitservice.ProjectionBuilder(&fakeProjectionBuilder{})
+	repositoryProvisioner := gitservice.RepositoryProvisioner(&fakeRepositoryProvisioner{})
+	pluginSourceInspector := gitservice.PluginSourceInspector(&fakePluginSourceInspector{})
+	hub.Map(&engine, &db, &repoSvc, &projectionBuilder, &repositoryProvisioner, &pluginSourceInspector)
+
+	mod := testMod()
+	mod.pluginLifecycle = &runtimePluginLifecycle{}
+	if err := mod.PostInit(hub); err != nil {
+		t.Fatalf("PostInit() error = %v", err)
+	}
+	if err := mod.Load(hub); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	public := httptest.NewRecorder()
+	engine.ServeHTTP(public, httptest.NewRequest(http.MethodGet, "/api/v1/namespaces/research/plugins/scanner", nil))
+	if public.Code != http.StatusOK {
+		t.Fatalf("anonymous exact Plugin status = %d, body=%s", public.Code, public.Body.String())
+	}
+
+	invalid := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/namespaces/research/plugins/scanner", nil)
+	request.Header.Set("Authorization", "Bearer invalid-token")
+	engine.ServeHTTP(invalid, request)
+	if invalid.Code != http.StatusUnauthorized || invalid.Header().Get("WWW-Authenticate") == "" {
+		t.Fatalf("invalid Bearer status/challenge = %d/%q, body=%s", invalid.Code, invalid.Header().Get("WWW-Authenticate"), invalid.Body.String())
+	}
+}
+
 func testMod() *Mod {
 	return &Mod{
-		config:      Config{JWTSecret: "test JWT secret"},
-		environment: identitymodel.MapEnvironment{identitymodel.APIKeyPepperEnvironment: "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE="},
-		migrate:     func(*gorm.DB) error { return nil },
+		config:             Config{JWTSecret: "test JWT secret"},
+		environment:        identitymodel.MapEnvironment{identitymodel.APIKeyPepperEnvironment: "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE="},
+		migrate:            func(*gorm.DB) error { return nil },
+		pluginLifecycle:    &runtimePluginLifecycle{},
+		receiveCoordinator: &fakeReceiveCoordinator{},
 		initializeIdentity: func(_ context.Context, _ *gorm.DB, _ identitymodel.Environment, jwtSecret string) (identityservice.Services, error) {
 			repository, _ := identitydao.NewRepository(&gorm.DB{})
 			account, _ := identityservice.NewAccountService(repository)
@@ -335,6 +471,55 @@ func assembledMod() *Mod {
 		git: &fakeRepositoryService{},
 	}
 }
+
+type runtimePluginLifecycle struct{}
+
+func (*runtimePluginLifecycle) Create(context.Context, auth.Principal, pluginhandler.CreateInput) (pluginhandler.Plugin, error) {
+	return pluginhandler.Plugin{}, errors.New("not implemented")
+}
+func (*runtimePluginLifecycle) List(context.Context, auth.Principal, string, int, int) (pluginhandler.PluginPage, error) {
+	return pluginhandler.PluginPage{}, errors.New("not implemented")
+}
+func (*runtimePluginLifecycle) Get(_ context.Context, principal auth.Principal, namespace, name string) (pluginhandler.Plugin, error) {
+	if !principal.IsAnonymous() || namespace != "research" || name != "scanner" {
+		return pluginhandler.Plugin{}, pluginhandler.ErrNotFound
+	}
+	return pluginhandler.Plugin{Namespace: namespace, Name: name, Status: "active", Visibility: "public", RepositoryStatus: "ready", CloneURL: "/git/research/scanner.git"}, nil
+}
+func (*runtimePluginLifecycle) Archive(context.Context, auth.Principal, string, string) error {
+	return errors.New("not implemented")
+}
+func (*runtimePluginLifecycle) Restore(context.Context, auth.Principal, string, string) error {
+	return errors.New("not implemented")
+}
+func (*runtimePluginLifecycle) SetVisibility(context.Context, auth.Principal, string, string, string) error {
+	return errors.New("not implemented")
+}
+func (*runtimePluginLifecycle) ListVersions(context.Context, auth.Principal, string, string, int, int) (pluginhandler.VersionPage, error) {
+	return pluginhandler.VersionPage{}, errors.New("not implemented")
+}
+func (*runtimePluginLifecycle) GetVersion(context.Context, auth.Principal, string, string, string) (pluginhandler.Version, error) {
+	return pluginhandler.Version{}, errors.New("not implemented")
+}
+func (*runtimePluginLifecycle) Publish(context.Context, auth.Principal, string, string, pluginhandler.PublishInput) (pluginhandler.Version, error) {
+	return pluginhandler.Version{}, errors.New("not implemented")
+}
+func (*runtimePluginLifecycle) SetDefaultVersion(context.Context, auth.Principal, string, string, string) error {
+	return errors.New("not implemented")
+}
+func (*runtimePluginLifecycle) ClearDefaultVersion(context.Context, auth.Principal, string, string) error {
+	return errors.New("not implemented")
+}
+
+var _ pluginhandler.Lifecycle = (*runtimePluginLifecycle)(nil)
+
+type fakeReceiveCoordinator struct{}
+
+func (*fakeReceiveCoordinator) Open(context.Context, string, string) (gitservice.ReceiveCoordination, error) {
+	return nil, errors.New("not implemented in fake")
+}
+
+var _ gitservice.ReceiveCoordinator = (*fakeReceiveCoordinator)(nil)
 
 func newTestHub() *kernel.Hub {
 	return &kernel.Hub{
@@ -373,6 +558,31 @@ func (*fakePATAuthenticator) AuthenticateSubscriptionPAT(context.Context, string
 var (
 	_ auth.GitPATAuthenticator          = (*fakePATAuthenticator)(nil)
 	_ auth.SubscriptionPATAuthenticator = (*fakePATAuthenticator)(nil)
+)
+
+type fakeRepositoryProvisioner struct{}
+
+func (*fakeRepositoryProvisioner) ProvisionRepository(_ context.Context, identity gitservice.RepositoryIdentity) (gitservice.ProvisionedRepository, error) {
+	return gitservice.NewProvisionedRepository(identity, "test-receipt"), nil
+}
+
+func (*fakeRepositoryProvisioner) RemoveProvisionedRepository(context.Context, gitservice.ProvisionedRepository) error {
+	return nil
+}
+
+func (*fakeRepositoryProvisioner) ListRepositoryOrphanCandidates(context.Context, time.Duration) ([]gitservice.RepositoryOrphanCandidate, error) {
+	return nil, nil
+}
+
+type fakePluginSourceInspector struct{}
+
+func (*fakePluginSourceInspector) InspectPluginSource(context.Context, string, string, string) (gitservice.PluginSourceInspection, error) {
+	return gitservice.PluginSourceInspection{}, errors.New("not implemented in fake")
+}
+
+var (
+	_ gitservice.RepositoryProvisioner = (*fakeRepositoryProvisioner)(nil)
+	_ gitservice.PluginSourceInspector = (*fakePluginSourceInspector)(nil)
 )
 
 type fakeRepositoryService struct{}

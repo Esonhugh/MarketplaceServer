@@ -39,10 +39,15 @@ func TestManagementV1ParsesAndResolvesLocalReferences(t *testing.T) {
 	walkReferences(t, document, document, "#")
 }
 
-func TestManagementV1PublishesOnlyImplementedIdentitySlice(t *testing.T) {
+func TestManagementV1PublishesOnlyImplementedSlices(t *testing.T) {
 	document := loadDocument(t, "management-v1.yaml")
 	paths := mapValue(t, document, "paths")
-	want := []string{loginPath, healthPath, tokensPath, tokenPath, revealPath}
+	want := []string{
+		loginPath, healthPath, tokensPath, tokenPath, revealPath,
+		pluginsPath, pluginPath, archivePluginPath, restorePluginPath,
+		visibilityPath, pluginVersionsPath, publishVersionPath,
+		pluginVersionPath, defaultVersionPath, clearDefaultPath,
+	}
 	sort.Strings(want)
 	got := sortedKeys(paths)
 	if !reflect.DeepEqual(got, want) {
@@ -98,8 +103,8 @@ func TestManagementV1IdentityResponsesAndSchemas(t *testing.T) {
 	}
 
 	parameters := mapValue(t, components, "parameters")
-	if got := sortedKeys(parameters); !reflect.DeepEqual(got, []string{"Page", "Size", "TokenId"}) {
-		t.Fatalf("parameters = %v, want page/size/token ID only", got)
+	if got := sortedKeys(parameters); !reflect.DeepEqual(got, []string{"Namespace", "Page", "PluginSlug", "Size", "TagName", "TokenId"}) {
+		t.Fatalf("parameters = %v, want deployed identity and Plugin parameters", got)
 	}
 	pageSchema := mapValue(t, mapValue(t, parameters, "Page"), "schema")
 	sizeSchema := mapValue(t, mapValue(t, parameters, "Size"), "schema")
@@ -174,8 +179,16 @@ func TestManagementV1DesignCreatePATIncludesBadRequest(t *testing.T) {
 	assertStatuses(t, operation(t, document, tokensPath, "post"), "201", "400", "401", "403", "422", "500")
 }
 
+func TestManagementV1DeployedPluginAndVersionSemantics(t *testing.T) {
+	assertPluginAndVersionSemantics(t, loadDocument(t, "management-v1.yaml"))
+}
+
 func TestManagementV1DesignPluginAndVersionSemantics(t *testing.T) {
-	document := loadDocument(t, "management-v1-design.yaml")
+	assertPluginAndVersionSemantics(t, loadDocument(t, "management-v1-design.yaml"))
+}
+
+func assertPluginAndVersionSemantics(t *testing.T, document map[string]any) {
+	t.Helper()
 
 	assertBearerOnly(t, operation(t, document, pluginsPath, "get"))
 	assertBearerOnly(t, operation(t, document, pluginsPath, "post"))
