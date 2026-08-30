@@ -27,6 +27,16 @@ import (
 
 const testRepositoryID = "01J9ZQ2M8K4V7T6P5N3R1X0ABC"
 
+func TestProtectedReceiveHookProcess(t *testing.T) {
+	if _, ok := ProtectedReceiveHookMode(); !ok {
+		return
+	}
+	if err := RunProtectedReceiveHook(context.Background(), os.Stdin, os.Stdout); err != nil {
+		os.Exit(1)
+	}
+	os.Exit(0)
+}
+
 func TestServiceStoresRepositoryByOpaqueIDOnly(t *testing.T) {
 	fake := newFakeGit(t)
 	root := t.TempDir()
@@ -302,7 +312,8 @@ func TestModMapsRepositoryServiceAndRoutesAnonymousUploadPack(t *testing.T) {
 	distributionResolver := distributionservice.Resolver(fakeDistributionResolver{})
 	gitPATAuthenticator := auth.GitPATAuthenticator(fakeGitAuthenticator{})
 	authorizer := auth.Authorizer(fakeGitAuthorizer{})
-	hub.Map(&engine, &resolver, &distributionResolver, &gitPATAuthenticator, &authorizer)
+	receiveCoordinator := gitservice.ReceiveCoordinator(&recordingReceiveCoordinator{coordination: &recordingReceiveCoordination{}})
+	hub.Map(&engine, &resolver, &distributionResolver, &gitPATAuthenticator, &authorizer, &receiveCoordinator)
 
 	mod := &Mod{}
 	cfg := mod.Config().(*Config)
@@ -487,7 +498,7 @@ func TestSmartHTTPMapsGitServicesToPATOperations(t *testing.T) {
 		t.Fatal(err)
 	}
 	repository := gitservice.Repository{ID: testRepositoryID, NamespaceID: "namespace-a", OwnerUserID: "user-alice", Visibility: "private", Status: gitservice.StatusReady}
-	authenticator := &recordingGitPATAuthenticator{principal: gitPATPrincipal(t, auth.ActionRepositoryRead, auth.ActionRepositoryWrite)}
+	authenticator := &recordingGitPATAuthenticator{principal: gitPATPrincipal(t, auth.ActionPluginRead, auth.ActionPluginWrite)}
 	engine := newSmartHTTPTestEngineWithDependencies(t, Config{StorageRoot: root, gitBinary: fake.path}, &fakeRepositoryResolver{repositories: map[string]gitservice.Repository{"team-a/plugin-one": repository}}, authenticator)
 
 	for _, test := range []struct {
@@ -838,7 +849,7 @@ func TestSmartHTTPUnknownLengthLimitDoesNotLeakReaderError(t *testing.T) {
 	}
 }
 
-func TestModConfigExposesOnlyStorageRoot(t *testing.T) {
+func TestModConfigExposesRuntimeDependencies(t *testing.T) {
 	mod := &Mod{}
 	cfg := mod.Config().(*Config)
 	if cfg.gitBinary != defaultGitBinary {
@@ -862,14 +873,17 @@ func TestModConfigExposesOnlyStorageRoot(t *testing.T) {
 			exported = append(exported, field)
 		}
 	}
-	if len(exported) != 1 || exported[0].Name != "StorageRoot" {
-		t.Fatalf("exported Git config fields = %#v, want only StorageRoot", exported)
+	if len(exported) != 2 || exported[0].Name != "StorageRoot" || exported[1].Name != "ValidatorBinary" {
+		t.Fatalf("exported Git config fields = %#v, want StorageRoot and ValidatorBinary", exported)
 	}
-	if got := exported[0].Tag.Get("yaml"); got != "storageRoot" {
-		t.Fatalf("Config.StorageRoot yaml tag = %q, want storageRoot", got)
-	}
-	if got := exported[0].Tag.Get("mapstructure"); got != "storageRoot" {
-		t.Fatalf("Config.StorageRoot mapstructure tag = %q, want storageRoot", got)
+	for _, field := range exported {
+		want := map[string]string{"StorageRoot": "storageRoot", "ValidatorBinary": "validatorBinary"}[field.Name]
+		if got := field.Tag.Get("yaml"); got != want {
+			t.Fatalf("Config.%s yaml tag = %q, want %q", field.Name, got, want)
+		}
+		if got := field.Tag.Get("mapstructure"); got != want {
+			t.Fatalf("Config.%s mapstructure tag = %q, want %q", field.Name, got, want)
+		}
 	}
 }
 
@@ -883,7 +897,8 @@ func TestSmartHTTPValidatesRouteBeforeRepositoryResolution(t *testing.T) {
 	distributionResolver := distributionservice.Resolver(fakeDistributionResolver{})
 	gitPATAuthenticator := auth.GitPATAuthenticator(fakeGitAuthenticator{})
 	authorizer := auth.Authorizer(fakeGitAuthorizer{})
-	hub.Map(&engine, &resolver, &distributionResolver, &gitPATAuthenticator, &authorizer)
+	receiveCoordinator := gitservice.ReceiveCoordinator(&recordingReceiveCoordinator{coordination: &recordingReceiveCoordination{}})
+	hub.Map(&engine, &resolver, &distributionResolver, &gitPATAuthenticator, &authorizer, &receiveCoordinator)
 	mod := &Mod{config: Config{StorageRoot: root, gitBinary: fake.path}}
 	if err := mod.Init(&hub); err != nil {
 		t.Fatalf("Mod.Init() error = %v", err)
@@ -917,7 +932,8 @@ func TestSmartHTTPRoutesAllowOnlyPublicReadsAndFailClosedForWrites(t *testing.T)
 	distributionResolver := distributionservice.Resolver(fakeDistributionResolver{})
 	gitPATAuthenticator := auth.GitPATAuthenticator(fakeGitAuthenticator{})
 	authorizer := auth.Authorizer(fakeGitAuthorizer{})
-	hub.Map(&engine, &resolver, &distributionResolver, &gitPATAuthenticator, &authorizer)
+	receiveCoordinator := gitservice.ReceiveCoordinator(&recordingReceiveCoordinator{coordination: &recordingReceiveCoordination{}})
+	hub.Map(&engine, &resolver, &distributionResolver, &gitPATAuthenticator, &authorizer, &receiveCoordinator)
 
 	mod := &Mod{}
 	cfg := mod.Config().(*Config)
@@ -971,7 +987,7 @@ func TestRealGitSmartHTTPAuthorizedPushInteroperability(t *testing.T) {
 	}
 
 	engine := newSmartHTTPTestEngineWithResolver(t, Config{StorageRoot: root, gitBinary: gitBinary}, &fakeRepositoryResolver{repositories: map[string]gitservice.Repository{
-		"team-a/plugin-one": {ID: testRepositoryID, NamespaceID: "namespace-a", OwnerUserID: "user-alice", Visibility: "private", Status: gitservice.StatusReady},
+		"team-a/plugin-one": {ID: testRepositoryID, NamespaceID: "namespace-a", OwnerUserID: "user-alice", Slug: "plugin-one", Visibility: "private", Status: gitservice.StatusReady},
 	}})
 	server := httptest.NewServer(engine)
 	defer server.Close()
@@ -1065,13 +1081,17 @@ func newSmartHTTPTestEngineWithResolver(t *testing.T, config Config, repositoryR
 
 func newSmartHTTPTestEngineWithDependencies(t *testing.T, config Config, repositoryResolver gitservice.RepositoryResolver, gitPATAuthenticator auth.GitPATAuthenticator) *jinengine.Engine {
 	t.Helper()
+	if config.ValidatorBinary == "" {
+		config.ValidatorBinary = newScriptGit(t, "#!/bin/sh\nexit 0\n")
+	}
 	engine := jinengine.New()
 	hub := kernel.Hub{Injector: inject.New()}
 	resolver := repositoryResolver
 	distributionResolver := distributionservice.Resolver(fakeDistributionResolver{})
 	authenticator := gitPATAuthenticator
 	authorizer := auth.Authorizer(fakeGitAuthorizer{})
-	hub.Map(&engine, &resolver, &distributionResolver, &authenticator, &authorizer)
+	receiveCoordinator := gitservice.ReceiveCoordinator(&recordingReceiveCoordinator{coordination: &recordingReceiveCoordination{}})
+	hub.Map(&engine, &resolver, &distributionResolver, &authenticator, &authorizer, &receiveCoordinator)
 	mod := &Mod{config: config}
 	if err := mod.Init(&hub); err != nil {
 		t.Fatalf("Mod.Init() error = %v", err)
@@ -1152,12 +1172,12 @@ func (fakeGitAuthenticator) AuthenticateGitPAT(_ context.Context, username, plai
 	}
 	switch plaintext {
 	case "git-write-pat":
-		return auth.NewUserPrincipal("user-alice", username, auth.CredentialPAT, auth.RestrictedScopes(auth.ActionRepositoryRead, auth.ActionRepositoryWrite))
+		return auth.NewUserPrincipal("user-alice", username, auth.CredentialPAT, auth.RestrictedScopes(auth.ActionPluginRead, auth.ActionPluginWrite))
 	case "git-clone-pat":
 		if operation != auth.GitOperationRead {
 			return auth.Principal{}, errors.New("invalid credentials")
 		}
-		return auth.NewUserPrincipal("user-alice", username, auth.CredentialPAT, auth.RestrictedScopes(auth.ActionRepositoryRead))
+		return auth.NewUserPrincipal("user-alice", username, auth.CredentialPAT, auth.RestrictedScopes(auth.ActionPluginRead))
 	case "sub-read-pat", "account-password", "jwt-token", "wrong", "revoked-pat", "expired-pat", "disabled-user-pat":
 		return auth.Principal{}, errors.New("invalid credentials")
 	default:
@@ -1168,10 +1188,10 @@ func (fakeGitAuthenticator) AuthenticateGitPAT(_ context.Context, username, plai
 type fakeGitAuthorizer struct{}
 
 func (fakeGitAuthorizer) Authorize(_ context.Context, principal auth.Principal, action auth.Action, resource auth.ResourceRef) error {
-	if resource.Type != "repository" || resource.ID != testRepositoryID {
-		return errors.New("unknown repository")
+	if resource.Type != auth.ResourcePlugin || resource.ID != testRepositoryID {
+		return errors.New("unknown plugin")
 	}
-	if action == auth.ActionRepositoryRead && principal.IsAnonymous() {
+	if action == auth.ActionPluginRead && principal.IsAnonymous() {
 		return nil
 	}
 	if principal.IsUser() && principal.Allows(action) {
@@ -1224,6 +1244,14 @@ case "${1-}" in
   init)
     if [ "${2-}" = "--bare" ]; then
       mkdir -p "${3-}"
+      exit 0
+    fi
+    ;;
+  --git-dir=*)
+    if [ "${2-}" = "symbolic-ref" ] && [ "${3-}" = "HEAD" ] && [ "${4-}" = "refs/heads/main" ]; then
+      exit 0
+    fi
+    if [ "${2-}" = "config" ]; then
       exit 0
     fi
     ;;
