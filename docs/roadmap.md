@@ -2,17 +2,13 @@
 
 This roadmap is the authoritative future delivery order. Items listed here are planned unless [current-state.md](current-state.md) explicitly classifies them as implemented or foundation capability; source code and tests remain authoritative.
 
-## Near-term: complete the single-user Plugin workflow
+## Near-term: production hardening
 
-### Plugin management and hidden Git repository
+Plugin management、shared-ID hidden Repository、Git-first provisioning/补偿、protected canonical-tag receive、Version lifecycle、durable receive coordination 与 projection pointer/artifact coordination 已实现，见 [current-state.md](current-state.md)。后续只保留运维强化：
 
-- Add tenant-scoped Plugin create, read, and delete lifecycle APIs; do not expose independent repository CRUD.
-- Creation accepts only a lowercase kebab-case Plugin name, defaults to public, and atomically creates the hidden one-to-one repository.
-- Use Plugin name as the immutable slug/Git path; IDs, storage placement and clone URL remain server-managed.
-- Make Plugin read authorization also govern clone/fetch; keep push under separate Plugin write authorization.
-- Add repository provisioning states and recoverable filesystem jobs as Plugin implementation details.
-- Before protected default-branch/tag updates, export proposed commits in isolation, run `claude plugin validate`, and require exact manifest/Plugin name equality; tag validation is strict.
-- Add bounded repository size, request size, push concurrency, operation quotas, durable push events, and ref reconciliation.
+- Add bounded repository size, request size, push concurrency, and operation quotas beyond the current HTTP limits.
+- Schedule the existing receive, orphan-cleanup, and projection-GC reconciliation entry points with durable worker leases, bounded retries, and operational visibility.
+- Add audited physical deletion and retention only after the archive/tombstone lifecycle has proven stable.
 
 ### Authentication hardening remaining work
 
@@ -29,15 +25,7 @@ Login、固定 30 天 HS256 JWT、management Bearer-only、PAT 三档 preset、�
 - Verify real Git clients against repository default-branch initialization and clone checkout behavior.
 - Add versioned migration handling for any legacy repository status values.
 
-## Next: tag-driven Plugin versions and Marketplace publication
-
-### Plugin versions
-
-- Publish by selecting an existing unpublished canonical `v`-prefixed SemVer tag; ignore manifest `version` as release identity.
-- Treat each published tag as one logical version and track the tag's current full commit SHA.
-- Reject protected tag updates unless strict Claude Plugin validation and exact manifest-name checks pass.
-- On tag movement, update the same version and prebuild every Marketplace revision that references the Plugin+tag.
-- Prefer the highest stable SemVer for latest; use the highest prerelease only when no stable version exists.
+## Next: Marketplace publication
 
 ### Marketplace authoring
 

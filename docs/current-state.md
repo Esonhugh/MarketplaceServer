@@ -33,17 +33,17 @@
 
 | 能力 | 状态 | 当前范围 | 主要依据 |
 |---|---|---|---|
-| HTTP 与 SQL 基础设施 | 已实现 | jin HTTP engine、PostgreSQL/MySQL GORM 生命周期 | `mod/jin/`, `mod/sql/` |
+| HTTP 与 SQL 基础设施 | 已实现 | jin HTTP engine；PostgreSQL 生产与 SQLite 单进程开发/测试 GORM 生命周期；其他 driver 拒绝启动 | `mod/jin/`, `mod/sql/` |
 | Identity | 已实现 | 用户、个人 namespace、系统组、成员关系、管理员 bootstrap、password login、固定 30 天 HS256 management JWT 与请求平面专用认证 | `mod/backend/domain/identity/{model,dao,service}/`, `mod/backend/handler/identity/` |
 | Personal Access Token | 已实现 | 创建、page/size/total 列表、owner password-confirmed reveal、幂等撤销、三档 preset、状态与可选过期时间 | `mod/backend/domain/identity/service/token_service.go`, `mod/backend/handler/identity/tokens.go` |
 | Authorization | 已实现 | 当前用户、组、namespace、repository、Plugin、Marketplace 资源的 action policy | `mod/backend/domain/authorization/` |
-| 开发 Git Smart HTTP | 已实现 | repository advertise、upload-pack、receive-pack；按 read/write action 授权 | `mod/git/mod.go`, `mod/git/production_smarthttp_integration_test.go` |
-| 不可变 Git 投影 | 已实现 | Marketplace/Plugin projection builder 与只读 reader contract | `pkg/gitservice/`, `mod/git/service.go` |
-| Public distribution | 已实现 | Marketplace public key、Plugin distribution UUID、只读 advertise/upload-pack、Marketplace JSON | `mod/git/distribution_http.go`, `mod/backend/handler/distribution/marketplace_json.go` |
+| 开发 Git Smart HTTP | 已实现 | Plugin-backed advertise/upload-pack；receive-pack 使用受管 hook、quarantine 内严格 source validation、expected-old ref transaction 与 durable coordinator，任一保护检查失败拒绝整次 push | `mod/git/{mod,service,receive}.go`, `mod/git/receive_test.go` |
+| 不可变 Git 投影 | 已实现 | Marketplace/Plugin projection builder、artifact/pointer authority 与只读 reader contract | `pkg/gitservice/`, `mod/git/service.go`, `mod/backend/domain/plugin/receive/` |
+| Public distribution | 已实现 | Marketplace public key、Plugin distribution UUID、只读 advertise/upload-pack、Marketplace JSON；解析只信任 ready projection pointer/artifact chain | `mod/git/distribution_http.go`, `mod/backend/domain/distribution/gorm_repository.go` |
 | 用户动态 Marketplace JSON | 已实现 | BasicAuth 后按当前可读 Plugin 生成用户私有索引，响应 `private, no-store` | `mod/backend/handler/distribution/user_marketplace_json.go` |
-| Plugin/version/Marketplace persistence | 基础能力 | repository、Plugin、version、revision、distribution、projection models 与 publication service | `mod/backend/domain/distribution/` |
-| 完整 repository/Plugin CRUD | 规划中 | 尚无完整管理 API 与 provisioning/reconciliation 流程 | `roadmap.md` |
-| 完整版本发布与 Marketplace authoring | 规划中 | 尚无完整 draft、validate、publish、rollback 管理 API | `roadmap.md` |
+| Plugin lifecycle | 已实现 | shared-ID Plugin/hidden Repository、Git-first provisioning/补偿、tenant-scoped create/list/get、archive/restore/visibility | `mod/backend/domain/plugin/`, `mod/backend/handler/plugin/` |
+| Plugin Version lifecycle | 已实现 | canonical tag publish/list/get、default version、deleted tombstone、manifest snapshot/digest 与 tag move projection 协调 | `mod/backend/domain/plugin/service.go`, `mod/backend/domain/plugin/receive/` |
+| Marketplace authoring | 规划中 | 尚无完整 draft、publish、rollback 管理 API；现有 publication service 不是完整 authoring API | `roadmap.md` |
 | 团队、角色矩阵、审计 | 规划中 | 当前没有 team lifecycle、完整 RBAC 或 append-only audit API | `roadmap.md` |
 | SSH Git | 规划中 | 当前没有 SSH listener、公钥认证或 transport wiring | `roadmap.md` |
 | Identity 管理前端 | 已实现 | login/session 与当前用户 PAT list/create/reveal/revoke UI；静态嵌入和 SPA boundary 保持不变 | `mod/frontend/web/src/`, `mod/frontend/` |
@@ -51,13 +51,14 @@
 
 ## 当前 backend 领域
 
-`mod/backend/mod.go` 当前统一装配三个内部领域：
+`mod/backend/mod.go` 当前统一装配四个内部领域：
 
 - `domain/identity`：按 `model`、`dao`、`service` package 隔离持久化 record、GORM 查询/迁移与业务/认证逻辑；HTTP 协议在 `handler/identity`；
-- `domain/authorization`
-- `domain/distribution`
+- `domain/authorization`：实现 management、Git 与 distribution 共用的 action policy；
+- `domain/plugin`：实现 shared-ID Plugin/hidden Repository 聚合、Version、受保护 receive 协调与可调用 recovery；HTTP 协议在 `handler/plugin`；
+- `domain/distribution`：只解析 ready projection pointer/artifact chain 和用户动态索引。
 
-Identity 的 model/dao/service 是同一 backend 内部领域的分层，不是新增 kernel module，也不通过全局 DI 暴露 DAO 或 GORM model。`teams`、`plugins`、`versions`、`marketplaces` 和 `audit` 可以成为未来的 backend 内部领域，但不是当前已经存在的独立 package，也不是新的 kernel module。
+这些领域都是同一 backend 内部的分层，不是新增 kernel module，也不通过全局 DI 暴露 DAO 或 GORM model。`teams` 和 `audit` 可以成为未来的 backend 内部领域，但当前尚不存在。Marketplace persistence/publication 基础已存在于 distribution/plugin 领域，完整 authoring API 尚未交付。
 
 ## 当前路由
 
@@ -73,6 +74,17 @@ Identity 的 model/dao/service 是同一 backend 内部领域的分层，不是�
 | `POST` | `/api/v1/me/tokens` | Bearer JWT |
 | `DELETE` | `/api/v1/me/tokens/:tokenId` | Bearer JWT |
 | `POST` | `/api/v1/me/tokens/:tokenId/reveal` | Bearer JWT + body 中的当前账号 password |
+| `GET` | `/api/v1/namespaces/:namespace/plugins` | Bearer JWT + `plugin.list` |
+| `POST` | `/api/v1/namespaces/:namespace/plugins` | Bearer JWT + `plugin.create` |
+| `GET` | `/api/v1/namespaces/:namespace/plugins/:plugin` | Bearer JWT + `plugin.read` |
+| `POST` | `/api/v1/namespaces/:namespace/plugins/:plugin:archive` | Bearer JWT + `plugin.archive` |
+| `POST` | `/api/v1/namespaces/:namespace/plugins/:plugin:restore` | Bearer JWT + `plugin.write` |
+| `POST` | `/api/v1/namespaces/:namespace/plugins/:plugin:set-visibility` | Bearer JWT + `plugin.write` |
+| `GET` | `/api/v1/namespaces/:namespace/plugins/:plugin/versions` | Bearer JWT + `plugin.read` |
+| `GET` | `/api/v1/namespaces/:namespace/plugins/:plugin/versions/:tag` | Bearer JWT + `plugin.read`；deleted tombstone 返回 `410` |
+| `POST` | `/api/v1/namespaces/:namespace/plugins/:plugin/versions:publish` | Bearer JWT + `plugin.publish` |
+| `POST` | `/api/v1/namespaces/:namespace/plugins/:plugin/versions/:tag:set-default` | Bearer JWT + `plugin.publish` |
+| `DELETE` | `/api/v1/namespaces/:namespace/plugins/:plugin/default-version` | Bearer JWT + `plugin.publish` |
 
 ### 开发 Git Smart HTTP
 
@@ -93,7 +105,7 @@ Identity 的 model/dao/service 是同一 backend 内部领域的分层，不是�
 | `GET` | `/distribution/plugins/:distribution/info/refs` | 只允许 `git-upload-pack` advertisement |
 | `POST` | `/distribution/plugins/:distribution/git-upload-pack` | 只读 Plugin projection |
 
-当前没有 distribution receive-pack、SSH route 或本文之外的完整管理 API。
+当前没有 distribution receive-pack、SSH route、Marketplace authoring API 或本文之外的完整管理 API。
 
 ## 当前持久化基础
 
@@ -107,12 +119,15 @@ Identity 当前迁移：
 - user/group memberships
 - personal access tokens、三档 cumulative preset、repeatably revealable plaintext 与 HMAC lookup index
 
-Distribution 当前迁移：
+Plugin 与 distribution 当前迁移：
 
-- repositories 与 Plugins
-- Plugin versions
+- shared-ID repositories 与 Plugins
+- Plugin versions 与 version histories
+- repository orphan cleanup records
+- durable receive batches 与 intents
 - Marketplace templates、revisions 与 revision items
-- Marketplace distributions 与 immutable projections
+- projection artifacts、revision pointers、pointer transitions 与 GC jobs
+- Marketplace distributions
 - Plugin distributions
 
 Identity 字段以 `mod/backend/domain/identity/model/model.go` 为准，查询与 migration/legacy guard 以 `mod/backend/domain/identity/dao/` 为准；其他领域仍以各自 model/migrate 源码为准。当前没有 team、invitation、audit、outbox、job、session 或 SSH key migration。
@@ -134,7 +149,8 @@ Identity 字段以 `mod/backend/domain/identity/model/model.go` 为准，查询�
 - Identity migration 发现旧 `personal_access_token_scopes` 或缺少 `preset`/`secret_plaintext`/`secret_hmac` 的旧 PAT table 时拒绝启动，不提供自动 backfill 或 destructive migration；开发环境需在确认无需保留数据后由 operator 重建数据库，非开发环境必须先备份并设计显式迁移。
 - 没有 SSH Git transport。
 - 没有完整 team lifecycle、五角色矩阵和审计查询。
-- 没有完整 repository/Plugin CRUD、版本发布、Marketplace draft/publish/rollback API。
+- Plugin 不提供独立 Repository CRUD 或物理删除；这是 shared-ID hidden Repository 产品边界，不是缺失的独立资源 API。
+- 没有完整 Marketplace draft/publish/rollback 管理 API；receive/orphan/projection recovery 目前是可调用基础能力，尚无常驻 worker 调度。
 - frontend 已交付 login 与当前用户 PAT management，但 namespace/team/Plugin/Marketplace/audit 页面仍未实现，不等于完整管理 UI。
 - PostgreSQL-backed 测试需要 `MARKETPLACE_TEST_POSTGRES_DSN`；未设置时会显式跳过。
 

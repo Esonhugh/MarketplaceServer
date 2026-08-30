@@ -5,7 +5,7 @@
 - **Created:** 2026-08-13
 - **Last reviewed:** 2026-08-16
 - **Design approval:** 2026-08-16
-- **Implementation approval:** none
+- **Implementation approval:** 2026-08-30，all implementation slices in this design; out-of-scope items remain excluded
 - **Related:** [project goals](../../../project-goals.md), [roadmap](../../../roadmap.md), [product invariants](../../../product-invariants.md)
 
 ## 1. Outcome and scope
@@ -138,10 +138,12 @@ Backend owns SQL policy/state/orchestration. Git owns filesystem, refs, quaranti
 | intent/projection recovery | crash points, staged digest, accepted/unaccepted/ambiguous ref reconciliation, fail-closed reads, GC idempotency, race tests |
 | integration/docs | DI boundary, deployed OpenAPI promotion only after conformance, current-state and operations evidence |
 
-Agents may read shared files but implementation owners must have exclusive write scope. Shared DI/OpenAPI/current-state changes are serialized by the integration owner. Each slice requires separate implementation approval, TDD, focused and full applicable checks, and a cohesive new commit only when explicitly requested.
+Agents may read shared files but implementation owners must have exclusive write scope. Shared DI/OpenAPI/current-state changes are serialized by the integration owner. The 2026-08-30 approval covers every slice in this design. Each slice still requires TDD, focused and full applicable checks, and a cohesive new commit only when explicitly requested.
 
 Required final evidence includes `git diff --check`, focused tests, `go test ./...`, `go test -race ./...`, `go vet ./...`, `go build ./...`, real Git client coverage and PostgreSQL tests. Any skipped PostgreSQL, validator, Git, frontend or SSH coverage must be reported.
 
 ## 11. Approval record
 
-The design decisions were reviewed interactively and the user instructed that they be fixed in documentation and committed on 2026-08-16. This approves the design only. No Plugin lifecycle runtime implementation, deployed route, migration, worker or frontend is authorized or claimed.
+The design decisions were reviewed interactively and the user instructed that they be fixed in documentation and committed on 2026-08-16. That approval covered the design only.
+
+On 2026-08-30 the user explicitly requested complete implementation of the approved design. This authorizes the shared-ID persistence/provisioning, lifecycle/management, Git authorization/admission, Version/publication, intent/projection recovery, integration and documentation slices. The out-of-scope items in section 1 remain excluded, including frontend implementation and production migration of valuable legacy data. Runtime implementation is claimed only after its code and required conformance evidence exist.

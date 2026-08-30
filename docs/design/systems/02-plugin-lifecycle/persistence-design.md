@@ -3,7 +3,7 @@
 - **Status:** `approved`
 - **Owner:** `backend` internal Plugin lifecycle domain
 - **Design approval:** 2026-08-16
-- **Implementation approval:** none
+- **Implementation approval:** 2026-08-30，target schema and rebuild-only legacy boundary; production legacy-data migration remains separately unapproved
 
 ## Database support and migration boundary
 

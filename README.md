@@ -6,18 +6,19 @@ MarketplaceServer 是一个自托管的 Claude Code Plugin 控制、Git 托管�
 
 - 固定的 `jin`、`sql`、`git`、`backend`、`frontend` 五模块运行时；
 - 用户、个人 namespace、系统组和管理员 bootstrap；
-- Basic 认证与 scoped personal access token 创建、列表、撤销；
-- 开发 repository 的 Git Smart HTTP clone/fetch/push 与服务端 authorization；
+- management JWT 与三档 scoped personal access token 创建、列表、查看、撤销；
+- shared-ID Plugin/hidden Repository lifecycle 与 canonical-tag Version publish/default/tombstone；
+- 开发 repository 的 Git Smart HTTP clone/fetch，以及受保护 tag receive、严格 source validation 与 durable coordination；
 - Public Marketplace/Plugin immutable Git distribution 与 Marketplace JSON；
 - 按用户当前权限生成的私有 Marketplace JSON；
 - Svelte/Tailwind 静态产物经 `embed.FS` 托管。
 
-团队、完整 Plugin/version/Marketplace 管理、审计、SSH Git 和完整管理 UI 仍在规划中。精确状态见 [当前实现状态](docs/current-state.md)，不要用目标设计推断已交付能力。
+团队、Marketplace authoring、审计、SSH Git、recovery 常驻 worker 和完整管理 UI 仍在规划中。精确状态见 [当前实现状态](docs/current-state.md)，不要用目标设计推断已交付能力。
 
 ## 前置条件
 
 - Go 版本与 toolchain 以 [`go.mod`](go.mod) 为准；
-- PostgreSQL 或 MySQL；
+- PostgreSQL，或仅用于单进程本地开发/测试的 SQLite；
 - 系统 Git binary；
 - Node/npm 仅用于重新构建 frontend 静态产物。
 

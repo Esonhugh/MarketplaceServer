@@ -3,7 +3,15 @@
 - **Status:** `approved`
 - **Owner:** `git` transport/storage with `backend` Plugin policy ownership
 - **Design approval:** 2026-08-16
-- **Implementation approval:** none
+- **Implementation approval:** 2026-08-30，development Git authorization, protected receive, durable intent and reconciliation
+
+## Implementation execution decisions
+
+The approved runtime keeps the current direct `git receive-pack --stateless-rpc` transport. Protected receives use server-owned `pre-receive` plus `proc-receive`; all ref commands are committed through one expected-old `git update-ref --stdin` transaction so whole-push rejection does not depend on client `--atomic` support. Runtime startup fails closed when the installed Git lacks the required behavior.
+
+A receive is represented by one durable batch plus its effectful canonical-tag transitions. Every canonical-tag mutation acquires the Plugin effect lock before classification to close the candidate/publish race. Raw tag ref object IDs and peeled commit IDs are stored separately; CAS uses raw ref IDs while validation, Version `commitSha` and projection use peeled commit IDs. Object IDs follow the repository object format rather than a hard-coded SHA-1 length.
+
+Legacy independent-ID data uses the approved rebuild-only boundary: startup fails closed and does not dual-read or destructively migrate valuable data. PostgreSQL is production, SQLite is single-process development/testing, and MySQL is unsupported. Worker retry/lease defaults are operator configuration and may be tuned without changing the receive state machine.
 
 ## Resource and credential boundary
 

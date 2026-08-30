@@ -3,7 +3,7 @@
 - **Status:** `approved`
 - **Owner:** `backend` Plugin lifecycle domain and management handler
 - **Design approval:** 2026-08-16
-- **Implementation approval:** none
+- **Implementation approval:** 2026-08-30，all operations in this contract; frontend remains out of scope
 
 ## 请求平面与 authority
 
@@ -82,6 +82,17 @@ Actions are exactly `plugin.create`, `plugin.list`, `plugin.read`, `plugin.write
 - management always performs final `Principal + Action + Resource + Context` authorization.
 
 Changing public to private changes current content authorization only. Existing Marketplace index configuration is not rebuilt or erased, and historical index visibility is not a content credential.
+
+Stable execution details:
+
+- namespace and Plugin slugs are 1–63 characters so every accepted Plugin identity is valid on the development Git route;
+- Plugin pages sort by `name ASC` with the shared ID as an internal tie-breaker; Version pages sort by `publishedAt DESC`, then canonical tag;
+- unknown namespace list/create authorization returns `403` without disclosing namespace existence; exact Plugin/Version nondisclosure returns `404`;
+- an exact resource that is already disclosed to the principal but denies a different action may return `403`;
+- restore of a non-archived Plugin, any archived publish/default/visibility command, a deleted set-default target, or an unresolved protected transition returns `409`;
+- archive/restore remain available when Repository is `readOnly|error` because they repair product state without invoking Git; publish/default require Repository `ready`;
+- publishing an already available tag at the same raw ref and peeled commit is idempotent `201`; a different ref is a `409` and must use protected receive;
+- management responses that contain no credential secret use ordinary HTTP cache semantics; only secret-bearing login/PAT responses carry the secret `no-store` headers.
 
 ## Frontend boundary
 

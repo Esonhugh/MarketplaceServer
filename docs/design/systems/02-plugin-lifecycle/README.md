@@ -19,10 +19,10 @@
 
 | 文档 | Status | Approval |
 |---|---|---|
-| [System design](system-design.md) | `approved` | 2026-08-16，implementation not approved |
-| [Persistence design](persistence-design.md) | `approved` | 2026-08-16，implementation not approved |
-| [Management API contract rationale](management/api-contract.md) | `approved` | 2026-08-16，implementation not approved |
-| [Git contract](git/api-contract.md) | `approved` | 2026-08-16，implementation not approved |
+| [System design](system-design.md) | `approved` | design 2026-08-16；implementation 2026-08-30 |
+| [Persistence design](persistence-design.md) | `approved` | design 2026-08-16；implementation 2026-08-30 |
+| [Management API contract rationale](management/api-contract.md) | `approved` | design 2026-08-16；implementation 2026-08-30 |
+| [Git contract](git/api-contract.md) | `approved` | design 2026-08-16；implementation 2026-08-30 |
 
 ## Contract sources
 
@@ -31,15 +31,15 @@
 - 当前请求平面与 Git Smart HTTP 规则：[protocols.md](../../../protocols.md)
 - 当前实现能力汇总：[current-state.md](../../../current-state.md)
 
-## 当前基础与实现边界
+## 当前实现边界
 
-当前 runtime 已有 development Smart HTTP、bare repository 原语、Plugin/Version/Marketplace persistence foundation、immutable projection builder 和 read-only distribution reader。它没有本设计的完整 Plugin lifecycle services/routes、shared-ID target migration、protected receive admission、receive intent 或 reconciler。
+当前 runtime 已实现 shared-ID Plugin/hidden Repository migration、Plugin lifecycle services/routes、Version publish/default/tombstone、protected canonical-tag receive admission、durable receive intent、projection pointer/artifact coordination，以及可调用的 receive/orphan/projection-GC reconciliation。完整 Marketplace authoring API 与 recovery 常驻 worker 调度不属于当前已交付能力。
 
-目标仍保持五个顶层模块。`backend` 拥有 Plugin policy、lifecycle、authorization 与 SQL orchestration；`git` 只拥有 Git/storage/quarantine/projection mechanics。跨模块只传窄 interface/value DTO，不暴露 GORM records、DAO、handler、concrete service 或 server path。
+运行时仍保持五个顶层模块。`backend` 拥有 Plugin policy、lifecycle、authorization 与 SQL orchestration；`git` 只拥有 Git/storage/quarantine/projection mechanics。跨模块只传窄 interface/value DTO，不暴露 GORM records、DAO、handler、concrete service 或 server path。
 
 ## 状态
 
 - **Design status:** `approved`
 - **Design approval:** 2026-08-16，用户要求将交互确认结果固化并提交。
-- **Implementation status:** not implemented
-- **Implementation approval:** none；每个实现 slice 仍需单独批准。
+- **Implementation status:** implemented in the five-module runtime; executable verification status is recorded by the applicable delivery run and [operations](../../../operations.md) gates.
+- **Implementation approval:** 2026-08-30；用户批准完整实现本设计覆盖的全部 slice。独立 Repository CRUD、物理删除、Marketplace authoring API、private distribution credential、SSH、team role matrix、frontend 和跨系统 ACID 声明仍不在范围内。

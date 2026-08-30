@@ -19,7 +19,7 @@ sql ─────────→ git ─────────┴───�
 | `jin` | 创建和提供 `*jin.Engine`，在共享 listener 上运行 HTTP server |
 | `sql` | 创建、校验和关闭 GORM SQL backend |
 | `git` | repository 文件系统、Git subprocess、Smart HTTP、immutable projection storage |
-| `backend` | identity、authorization、distribution 以及未来的 teams、Plugin、version、Marketplace、audit 领域 |
+| `backend` | identity、authorization、Plugin/Version lifecycle、distribution，以及未来的 teams、完整 Marketplace authoring、audit 领域 |
 | `frontend` | Svelte/Tailwind 静态产物嵌入、静态响应与 SPA fallback |
 
 权威注册文件是 `cmd/server/modList/list.go`。普通产品能力应进入现有模块；增加顶层模块属于显式架构变更，必须同步模块清单测试、DI 文档和本架构文档。
@@ -85,7 +85,7 @@ handler → domain service → repository/adapter → model
 - repository/adapter：GORM 或外部 contract 调用；
 - model：持久化模型和最小领域 value，不直接作为 API DTO。
 
-当前 identity 领域按 `domain/identity/model`、`domain/identity/dao`、`domain/identity/service` 拆分，management HTTP 位于 `handler/identity`。这是 backend 内部分层；不会改变五模块拓扑，也不把 GORM record/DAO 映射到全局 DI。
+当前 identity 领域按 `domain/identity/model`、`domain/identity/dao`、`domain/identity/service` 拆分，management HTTP 位于 `handler/identity`。Plugin 领域在 `domain/plugin` 内拥有 shared-ID aggregate、Version、receive coordination 与 recovery，management HTTP 位于 `handler/plugin`。这些都是 backend 内部分层；不会改变五模块拓扑，也不把 GORM record/DAO 映射到全局 DI。
 
 handler 不直接执行 GORM 查询。backend 内部领域对象默认不 Map 到全局 DI；只有 `git`、`frontend` 等顶层模块确实消费的窄 contract 才能共享。
 
