@@ -5,6 +5,7 @@ import (
 	"time"
 
 	identitymodel "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/model"
+	plugindomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/plugin"
 	"gorm.io/gorm"
 )
 
@@ -13,18 +14,14 @@ const (
 	StatusBuilding = "building"
 	StatusRevoked  = "revoked"
 
-	RepositoryStatusProvisioning = "provisioning"
-	RepositoryStatusReady        = "ready"
-	RepositoryStatusReadOnly     = "readOnly"
-	RepositoryStatusError        = "error"
-	RepositoryStatusDeleting     = "deleting"
-	RepositoryStatusDeleted      = "deleted"
+	RepositoryStatusReady    = plugindomain.RepositoryStatusReady
+	RepositoryStatusReadOnly = plugindomain.RepositoryStatusReadOnly
+	RepositoryStatusError    = plugindomain.RepositoryStatusError
 )
 
 func validRepositoryStatus(status string) bool {
 	switch status {
-	case RepositoryStatusProvisioning, RepositoryStatusReady, RepositoryStatusReadOnly,
-		RepositoryStatusError, RepositoryStatusDeleting, RepositoryStatusDeleted:
+	case RepositoryStatusReady, RepositoryStatusReadOnly, RepositoryStatusError:
 		return true
 	default:
 		return false
@@ -35,54 +32,11 @@ func repositoryAllowsRead(status string) bool {
 	return status == RepositoryStatusReady || status == RepositoryStatusReadOnly
 }
 
-type Repository struct {
-	ID            string                  `gorm:"type:char(36);primaryKey"`
-	NamespaceID   string                  `gorm:"type:char(36);not null;uniqueIndex:uidx_repository_namespace_slug"`
-	Slug          string                  `gorm:"size:128;not null;uniqueIndex:uidx_repository_namespace_slug"`
-	Visibility    string                  `gorm:"size:32;not null"`
-	Status        string                  `gorm:"size:32;not null;check:chk_repositories_status,status IN ('provisioning','ready','readOnly','error','deleting','deleted')"`
-	StorageKey    string                  `gorm:"size:255;not null;uniqueIndex"`
-	DefaultBranch string                  `gorm:"size:255"`
-	CreatedAt     time.Time               `gorm:"not null"`
-	UpdatedAt     time.Time               `gorm:"not null"`
-	Namespace     identitymodel.Namespace `gorm:"constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
-}
+type Repository = plugindomain.Repository
 
-func (Repository) TableName() string { return "repositories" }
+type Plugin = plugindomain.Plugin
 
-type Plugin struct {
-	ID           string                  `gorm:"type:char(36);primaryKey"`
-	NamespaceID  string                  `gorm:"type:char(36);not null;uniqueIndex:uidx_plugin_namespace_slug"`
-	RepositoryID string                  `gorm:"type:char(36);not null;uniqueIndex"`
-	Slug         string                  `gorm:"size:128;not null;uniqueIndex:uidx_plugin_namespace_slug"`
-	Name         string                  `gorm:"size:255;not null"`
-	Description  string                  `gorm:"type:text"`
-	Visibility   string                  `gorm:"size:32;not null"`
-	Status       string                  `gorm:"size:32;not null"`
-	CreatedAt    time.Time               `gorm:"not null"`
-	UpdatedAt    time.Time               `gorm:"not null"`
-	Namespace    identitymodel.Namespace `gorm:"constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
-	Repository   Repository              `gorm:"constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
-}
-
-func (Plugin) TableName() string { return "plugins" }
-
-type PluginVersion struct {
-	ID               string    `gorm:"type:char(36);primaryKey"`
-	PluginID         string    `gorm:"type:char(36);not null;uniqueIndex:uidx_plugin_version;uniqueIndex:uidx_plugin_tag"`
-	Version          string    `gorm:"size:128;not null;uniqueIndex:uidx_plugin_version"`
-	TagName          string    `gorm:"size:255;not null;uniqueIndex:uidx_plugin_tag"`
-	CommitSHA        string    `gorm:"type:char(40);not null"`
-	ManifestDigest   string    `gorm:"type:char(64);not null"`
-	ManifestSnapshot []byte    `gorm:"type:json;not null"`
-	Status           string    `gorm:"size:32;not null"`
-	PublishedAt      time.Time `gorm:"not null"`
-	CreatedAt        time.Time `gorm:"not null"`
-	UpdatedAt        time.Time `gorm:"not null"`
-	Plugin           Plugin    `gorm:"constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
-}
-
-func (PluginVersion) TableName() string { return "plugin_versions" }
+type PluginVersion = plugindomain.PluginVersion
 
 type MarketplaceTemplate struct {
 	ID                  string                  `gorm:"type:char(36);primaryKey"`
@@ -122,7 +76,7 @@ type MarketplaceRevisionItem struct {
 	ID                   string              `gorm:"type:char(36);primaryKey"`
 	RevisionID           string              `gorm:"type:char(36);not null;uniqueIndex:uidx_revision_plugin"`
 	PluginID             string              `gorm:"type:char(36);not null;uniqueIndex:uidx_revision_plugin"`
-	PluginVersionID      string              `gorm:"type:char(36);not null"`
+	PluginTag            string              `gorm:"size:255;not null"`
 	PluginDistributionID string              `gorm:"type:char(36);not null"`
 	SourceURL            string              `gorm:"type:text;not null"`
 	DistributionSHA      string              `gorm:"type:char(40);not null"`
@@ -130,7 +84,6 @@ type MarketplaceRevisionItem struct {
 	CreatedAt            time.Time           `gorm:"not null"`
 	Revision             MarketplaceRevision `gorm:"constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
 	Plugin               Plugin              `gorm:"constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
-	PluginVersion        PluginVersion       `gorm:"constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
 }
 
 func (MarketplaceRevisionItem) TableName() string { return "marketplace_revision_items" }
@@ -188,7 +141,7 @@ type PluginDistribution struct {
 	ID                string              `gorm:"type:char(36);primaryKey"`
 	TemplateID        string              `gorm:"type:char(36);not null;uniqueIndex:uidx_plugin_distribution"`
 	PluginID          string              `gorm:"type:char(36);not null;uniqueIndex:uidx_plugin_distribution"`
-	PluginVersionID   string              `gorm:"type:char(36);not null;uniqueIndex:uidx_plugin_distribution"`
+	PluginTag         string              `gorm:"size:255;not null;uniqueIndex:uidx_plugin_distribution"`
 	RepositoryID      string              `gorm:"type:char(36);not null"`
 	TagName           string              `gorm:"size:255;not null"`
 	SourceTagType     string              `gorm:"size:32;not null"`
@@ -204,7 +157,6 @@ type PluginDistribution struct {
 	RevokedAt         *time.Time          `gorm:"index"`
 	Template          MarketplaceTemplate `gorm:"constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
 	Plugin            Plugin              `gorm:"constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
-	PluginVersion     PluginVersion       `gorm:"constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
 	Repository        Repository          `gorm:"constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
 }
 
@@ -212,7 +164,7 @@ func (PluginDistribution) TableName() string { return "plugin_distributions" }
 
 func (distribution *PluginDistribution) BeforeUpdate(tx *gorm.DB) error {
 	for _, field := range []string{
-		"ID", "TemplateID", "PluginID", "PluginVersionID", "RepositoryID", "TagName",
+		"ID", "TemplateID", "PluginID", "PluginTag", "RepositoryID", "TagName",
 		"SourceTagType", "SourceTagObjectID", "SourceCommitSHA", "SourceTreeSHA",
 		"DistributionSHA", "StorageKey", "ContentDigest", "CreatedAt",
 	} {

@@ -10,9 +10,6 @@ import (
 
 func TestMigrationModelsFollowDependencyOrder(t *testing.T) {
 	want := []reflect.Type{
-		reflect.TypeOf(&Repository{}),
-		reflect.TypeOf(&Plugin{}),
-		reflect.TypeOf(&PluginVersion{}),
 		reflect.TypeOf(&MarketplaceTemplate{}),
 		reflect.TypeOf(&MarketplaceRevision{}),
 		reflect.TypeOf(&MarketplaceRevisionItem{}),
@@ -46,14 +43,11 @@ func TestImmutableModelsRejectUpdates(t *testing.T) {
 
 func TestRepositoryStatusContract(t *testing.T) {
 	want := []string{
-		RepositoryStatusProvisioning,
 		RepositoryStatusReady,
 		RepositoryStatusReadOnly,
 		RepositoryStatusError,
-		RepositoryStatusDeleting,
-		RepositoryStatusDeleted,
 	}
-	if got := strings.Join(want, ","); got != "provisioning,ready,readOnly,error,deleting,deleted" {
+	if got := strings.Join(want, ","); got != "ready,readOnly,error" {
 		t.Fatalf("repository statuses = %q", got)
 	}
 	for _, status := range want {
@@ -71,7 +65,7 @@ func TestRepositoryStatusContract(t *testing.T) {
 			t.Errorf("repositoryAllowsRead(%q) = false", status)
 		}
 	}
-	for _, status := range []string{RepositoryStatusProvisioning, RepositoryStatusError, RepositoryStatusDeleting, RepositoryStatusDeleted, StatusActive} {
+	for _, status := range []string{RepositoryStatusError, StatusActive} {
 		if repositoryAllowsRead(status) {
 			t.Errorf("repositoryAllowsRead(%q) = true", status)
 		}
