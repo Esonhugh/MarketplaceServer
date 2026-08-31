@@ -19,7 +19,7 @@ func TestPluginLifecycleRecordContracts(t *testing.T) {
 		"ID", "NamespaceID", "Slug", "Visibility", "Status", "ArchivedFrom", "DefaultVersionTag", "CreatedAt", "UpdatedAt",
 	})
 	assertTableFields(t, reflect.TypeOf(PluginVersion{}), []string{
-		"ID", "PluginID", "Tag", "Status", "CommitSHA", "ManifestDigest", "ManifestSnapshot", "PublishedAt", "UpdatedAt", "DeletedAt",
+		"ID", "PluginID", "Tag", "Status", "RawTagObjectID", "CommitSHA", "ManifestDigest", "ManifestSnapshot", "PublishedAt", "UpdatedAt", "DeletedAt",
 	})
 	for name, record := range map[string]any{
 		"history":               PluginVersionHistory{},
@@ -107,7 +107,7 @@ func TestSQLiteMigrationEnforcesSharedIDAndLifecycleConstraints(t *testing.T) {
 
 	commit := strings.Repeat("a", 40)
 	digest := strings.Repeat("b", 64)
-	version := PluginVersion{ID: uuid.NewString(), PluginID: pluginID, Tag: "v1.0.0", Status: VersionStatusAvailable, CommitSHA: &commit, ManifestDigest: &digest, ManifestSnapshot: []byte(`{}`), PublishedAt: now, CreatedAt: now, UpdatedAt: now}
+	version := PluginVersion{ID: uuid.NewString(), PluginID: pluginID, Tag: "v1.0.0", Status: VersionStatusAvailable, RawTagObjectID: &commit, CommitSHA: &commit, ManifestDigest: &digest, ManifestSnapshot: []byte(`{}`), PublishedAt: now, CreatedAt: now, UpdatedAt: now}
 	if err := db.Create(&version).Error; err != nil {
 		t.Fatalf("create available Version: %v", err)
 	}
@@ -115,6 +115,10 @@ func TestSQLiteMigrationEnforcesSharedIDAndLifecycleConstraints(t *testing.T) {
 	duplicate.ID = uuid.NewString()
 	if err := db.Create(&duplicate).Error; err == nil {
 		t.Fatal("duplicate Plugin/tag Version was accepted")
+	}
+	missingRawTag := PluginVersion{ID: uuid.NewString(), PluginID: pluginID, Tag: "v1.1.0", Status: VersionStatusAvailable, CommitSHA: &commit, ManifestDigest: &digest, ManifestSnapshot: []byte(`{}`), PublishedAt: now, CreatedAt: now, UpdatedAt: now}
+	if err := db.Create(&missingRawTag).Error; err == nil {
+		t.Fatal("available Version without raw tag object ID was accepted")
 	}
 	invalidDeleted := PluginVersion{ID: uuid.NewString(), PluginID: pluginID, Tag: "v2.0.0", Status: VersionStatusDeleted, CommitSHA: &commit, PublishedAt: now, CreatedAt: now, UpdatedAt: now, DeletedAt: &now}
 	if err := db.Create(&invalidDeleted).Error; err == nil {
@@ -150,7 +154,7 @@ func TestSQLiteDefaultVersionTagReferencesAvailableVersion(t *testing.T) {
 	}
 	commit := strings.Repeat("a", 40)
 	digest := strings.Repeat("b", 64)
-	version := PluginVersion{ID: uuid.NewString(), PluginID: pluginID, Tag: "v1.0.0", Status: VersionStatusAvailable, CommitSHA: &commit, ManifestDigest: &digest, ManifestSnapshot: []byte(`{}`), PublishedAt: now, CreatedAt: now, UpdatedAt: now}
+	version := PluginVersion{ID: uuid.NewString(), PluginID: pluginID, Tag: "v1.0.0", Status: VersionStatusAvailable, RawTagObjectID: &commit, CommitSHA: &commit, ManifestDigest: &digest, ManifestSnapshot: []byte(`{}`), PublishedAt: now, CreatedAt: now, UpdatedAt: now}
 	if err := db.Create(&version).Error; err != nil {
 		t.Fatal(err)
 	}

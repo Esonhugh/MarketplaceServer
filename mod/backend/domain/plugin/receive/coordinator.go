@@ -23,15 +23,15 @@ var (
 type Options struct {
 	PostgresLockTimeout time.Duration
 	LockRetryInterval   time.Duration
+	EffectLocker        plugindomain.EffectLocker
 	Now                 func() time.Time
 }
 
 type Coordinator struct {
-	db                *gorm.DB
-	builder           gitservice.ProjectionBuilder
-	lockTimeout       time.Duration
-	lockRetryInterval time.Duration
-	now               func() time.Time
+	db      *gorm.DB
+	builder gitservice.ProjectionBuilder
+	locker  plugindomain.EffectLocker
+	now     func() time.Time
 }
 
 func NewCoordinator(db *gorm.DB, builder gitservice.ProjectionBuilder, options Options) (*Coordinator, error) {
@@ -54,17 +54,22 @@ func NewCoordinator(db *gorm.DB, builder gitservice.ProjectionBuilder, options O
 	if options.Now == nil {
 		options.Now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Coordinator{
-		db: db, builder: builder, lockTimeout: options.PostgresLockTimeout,
-		lockRetryInterval: options.LockRetryInterval, now: options.Now,
-	}, nil
+	locker := options.EffectLocker
+	if locker == nil {
+		var err error
+		locker, err = plugindomain.NewDatabaseEffectLocker(db, options.PostgresLockTimeout, options.LockRetryInterval)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &Coordinator{db: db, builder: builder, locker: locker, now: options.Now}, nil
 }
 
 func (coordinator *Coordinator) Open(ctx context.Context, pluginID, sessionID string) (gitservice.ReceiveCoordination, error) {
 	if coordinator == nil || pluginID == "" || sessionID == "" {
 		return nil, ErrUnavailable
 	}
-	unlock, err := coordinator.acquirePluginLock(ctx, pluginID)
+	unlock, err := coordinator.locker.LockPlugin(ctx, pluginID)
 	if err != nil {
 		return nil, ErrUnavailable
 	}
@@ -186,7 +191,7 @@ func (coordination *coordination) classify(ctx context.Context, commands []gitse
 		if command.Operation != gitservice.ReceiveTagMove && command.Operation != gitservice.ReceiveTagDelete {
 			return nil, ErrRejected
 		}
-		if command.OldObjectID == "" || command.OldCommitObjectID != *version.CommitSHA {
+		if version.RawTagObjectID == nil || command.OldObjectID == "" || command.OldObjectID != *version.RawTagObjectID || command.OldCommitObjectID != *version.CommitSHA {
 			return nil, ErrRejected
 		}
 		if command.Operation == gitservice.ReceiveTagMove && (command.NewObjectID == "" || command.NewCommitObjectID == "" || len(command.NewManifestDigest) != 64 || len(command.NewManifestSnapshot) == 0) {
@@ -445,7 +450,7 @@ func (coordination *coordination) applyResolution(ctx context.Context, batch plu
 
 func (coordination *coordination) completeIntent(tx *gorm.DB, batch plugindomain.ReceiveBatch, intent plugindomain.ReceiveIntent, transitions []plugindomain.RevisionProjectionTransition, now time.Time) error {
 	versionQuery := tx.Model(&plugindomain.PluginVersion{}).
-		Where("plugin_id = ? AND tag = ? AND status = ? AND commit_sha = ?", intent.PluginID, intent.Tag, intent.ExpectedVersionStatus, intent.ExpectedOldCommitSHA)
+		Where("plugin_id = ? AND tag = ? AND status = ? AND raw_tag_object_id = ? AND commit_sha = ?", intent.PluginID, intent.Tag, intent.ExpectedVersionStatus, intent.ExpectedOldObjectID, intent.ExpectedOldCommitSHA)
 	var historyOperation string
 	var newCommit *string
 	if intent.Operation == plugindomain.ReceiveOperationMove && intent.ProposedNewObjectID != nil && intent.ProposedNewCommitSHA != nil && intent.ProposedManifestDigest != nil && len(intent.ProposedManifestSnapshot) != 0 {
@@ -752,116 +757,6 @@ func (coordination *coordination) Close() error {
 		coordination.closeErr = coordination.unlock()
 	})
 	return coordination.closeErr
-}
-
-var sqliteProcessLocks = newKeyedLocks()
-
-func (coordinator *Coordinator) acquirePluginLock(ctx context.Context, pluginID string) (func() error, error) {
-	if strings.EqualFold(coordinator.db.Dialector.Name(), "sqlite") {
-		unlock, err := sqliteProcessLocks.lock(ctx, pluginID)
-		if err != nil {
-			return nil, err
-		}
-		return func() error { unlock(); return nil }, nil
-	}
-	return coordinator.acquirePostgresLock(ctx, pluginID)
-}
-
-func (coordinator *Coordinator) acquirePostgresLock(ctx context.Context, pluginID string) (func() error, error) {
-	sqlDB, err := coordinator.db.DB()
-	if err != nil {
-		return nil, err
-	}
-	lockCtx, cancel := context.WithTimeout(ctx, coordinator.lockTimeout)
-	defer cancel()
-	conn, err := sqlDB.Conn(lockCtx)
-	if err != nil {
-		return nil, err
-	}
-	locked := false
-	defer func() {
-		if !locked {
-			_ = conn.Close()
-		}
-	}()
-	ticker := time.NewTicker(coordinator.lockRetryInterval)
-	defer ticker.Stop()
-	for {
-		if err := conn.QueryRowContext(lockCtx, "SELECT pg_try_advisory_lock(hashtextextended($1, 0))", pluginID).Scan(&locked); err != nil {
-			return nil, err
-		}
-		if locked {
-			break
-		}
-		select {
-		case <-lockCtx.Done():
-			return nil, lockCtx.Err()
-		case <-ticker.C:
-		}
-	}
-	return func() error {
-		unlockCtx, unlockCancel := context.WithTimeout(context.Background(), coordinator.lockTimeout)
-		defer unlockCancel()
-		var unlocked bool
-		err := conn.QueryRowContext(unlockCtx, "SELECT pg_advisory_unlock(hashtextextended($1, 0))", pluginID).Scan(&unlocked)
-		closeErr := conn.Close()
-		if err != nil {
-			return err
-		}
-		if !unlocked {
-			return errors.New("receive advisory lock was not held")
-		}
-		return closeErr
-	}, nil
-}
-
-type keyedLocks struct {
-	mu    sync.Mutex
-	locks map[string]*keyedLock
-}
-
-type keyedLock struct {
-	semaphore chan struct{}
-	users     int
-}
-
-func newKeyedLocks() *keyedLocks {
-	return &keyedLocks{locks: make(map[string]*keyedLock)}
-}
-
-func (locks *keyedLocks) lock(ctx context.Context, key string) (func(), error) {
-	locks.mu.Lock()
-	entry := locks.locks[key]
-	if entry == nil {
-		entry = &keyedLock{semaphore: make(chan struct{}, 1)}
-		entry.semaphore <- struct{}{}
-		locks.locks[key] = entry
-	}
-	entry.users++
-	locks.mu.Unlock()
-
-	select {
-	case <-ctx.Done():
-		locks.releaseReference(key, entry)
-		return nil, ctx.Err()
-	case <-entry.semaphore:
-	}
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			entry.semaphore <- struct{}{}
-			locks.releaseReference(key, entry)
-		})
-	}, nil
-}
-
-func (locks *keyedLocks) releaseReference(key string, entry *keyedLock) {
-	locks.mu.Lock()
-	defer locks.mu.Unlock()
-	entry.users--
-	if entry.users == 0 {
-		delete(locks.locks, key)
-	}
 }
 
 var _ gitservice.ReceiveCoordinator = (*Coordinator)(nil)

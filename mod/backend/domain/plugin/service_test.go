@@ -226,7 +226,11 @@ func createServiceTestNamespace(t *testing.T, db *gorm.DB, slug string) identity
 
 func newServiceForTest(t *testing.T, db *gorm.DB, authorizer auth.Authorizer, provisioner gitservice.RepositoryProvisioner, inspector gitservice.PluginSourceInspector) *Service {
 	t.Helper()
-	service, err := NewService(db, authorizer, provisioner, inspector)
+	locker, err := NewDatabaseEffectLocker(db, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(db, authorizer, provisioner, inspector, locker)
 	if err != nil {
 		t.Fatal(err)
 	}

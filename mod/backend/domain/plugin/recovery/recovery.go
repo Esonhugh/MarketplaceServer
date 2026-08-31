@@ -27,6 +27,7 @@ const defaultBatchSize = 50
 type Options struct {
 	BatchSize        int
 	MinimumOrphanAge time.Duration
+	EffectLocker     plugindomain.EffectLocker
 	Now              func() time.Time
 }
 
@@ -38,6 +39,7 @@ type Reconciler struct {
 	gc      gitservice.ProjectionBuilder
 	fs      gitservice.RepositoryProvisioner
 	cleaner gitservice.RepositoryOrphanCleaner
+	locker  plugindomain.EffectLocker
 	opts    Options
 }
 
@@ -54,7 +56,15 @@ func New(db *gorm.DB, refs gitservice.PluginRefReader, builder gitservice.Projec
 	if options.Now == nil {
 		options.Now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Reconciler{db: db, ref: refs, gc: builder, fs: provisioner, cleaner: cleaner, opts: options}, nil
+	locker := options.EffectLocker
+	if locker == nil {
+		var err error
+		locker, err = plugindomain.NewDatabaseEffectLocker(db, 0, 0)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &Reconciler{db: db, ref: refs, gc: builder, fs: provisioner, cleaner: cleaner, locker: locker, opts: options}, nil
 }
 
 // ReconcileReceives re-reads refs for prepared/finalizing batches and resolves
@@ -85,6 +95,11 @@ func (r *Reconciler) ReconcileReceives(ctx context.Context) (int, error) {
 }
 
 func (r *Reconciler) reconcileBatch(ctx context.Context, batch plugindomain.ReceiveBatch) error {
+	unlock, err := r.locker.LockPlugin(ctx, batch.PluginID)
+	if err != nil {
+		return unavailable("lock receive batch", err)
+	}
+	defer func() { _ = unlock() }()
 	var repository plugindomain.Repository
 	if err := r.db.WithContext(ctx).First(&repository, "id = ?", batch.PluginID).Error; err != nil {
 		return r.manualBatch(ctx, batch.ID, "repository_missing")
@@ -221,7 +236,7 @@ func (r *Reconciler) applyIntent(tx *gorm.DB, batch plugindomain.ReceiveBatch, i
 		return err
 	}
 	if disposition == gitservice.ReceiveCompleted {
-		version := tx.Model(&plugindomain.PluginVersion{}).Where("plugin_id = ? AND tag = ? AND status = ? AND commit_sha = ?", intent.PluginID, intent.Tag, intent.ExpectedVersionStatus, intent.ExpectedOldCommitSHA)
+		version := tx.Model(&plugindomain.PluginVersion{}).Where("plugin_id = ? AND tag = ? AND status = ? AND raw_tag_object_id = ? AND commit_sha = ?", intent.PluginID, intent.Tag, intent.ExpectedVersionStatus, intent.ExpectedOldObjectID, intent.ExpectedOldCommitSHA)
 		var operation string
 		var newCommit *string
 		switch intent.Operation {
@@ -290,7 +305,9 @@ func completeTransition(tx *gorm.DB, transition plugindomain.RevisionProjectionT
 	} else {
 		return errors.New("invalid projection transition")
 	}
-	result := tx.Model(&plugindomain.RevisionProjectionPointer{}).Where("id = ? AND generation = ? AND available = ?", transition.PointerID, transition.ExpectedGeneration, false).Updates(updates)
+	query := tx.Model(&plugindomain.RevisionProjectionPointer{}).Where("id = ? AND generation = ? AND available = ?", transition.PointerID, transition.ExpectedGeneration, false)
+	query = whereNullableID(query, "artifact_id", transition.CurrentArtifactID)
+	result := query.Updates(updates)
 	if result.Error != nil || result.RowsAffected != 1 {
 		return errors.New("pointer cas mismatch")
 	}
@@ -303,7 +320,9 @@ func completeTransition(tx *gorm.DB, transition plugindomain.RevisionProjectionT
 }
 
 func abortTransition(tx *gorm.DB, transition plugindomain.RevisionProjectionTransition, now time.Time) error {
-	result := tx.Model(&plugindomain.RevisionProjectionPointer{}).Where("id = ? AND generation = ? AND available = ?", transition.PointerID, transition.ExpectedGeneration, false).Updates(map[string]any{"available": true, "updated_at": now})
+	query := tx.Model(&plugindomain.RevisionProjectionPointer{}).Where("id = ? AND generation = ? AND available = ?", transition.PointerID, transition.ExpectedGeneration, false)
+	query = whereNullableID(query, "artifact_id", transition.CurrentArtifactID)
+	result := query.Updates(map[string]any{"available": true, "updated_at": now})
 	if result.Error != nil || result.RowsAffected != 1 {
 		return errors.New("pointer cas mismatch")
 	}
@@ -313,6 +332,13 @@ func abortTransition(tx *gorm.DB, transition plugindomain.RevisionProjectionTran
 		}
 	}
 	return tx.Model(&plugindomain.RevisionProjectionTransition{}).Where("id = ?", transition.ID).Updates(map[string]any{"state": plugindomain.ProjectionTransitionStateAborted, "updated_at": now, "completed_at": now}).Error
+}
+
+func whereNullableID(query *gorm.DB, column string, value *string) *gorm.DB {
+	if value == nil {
+		return query.Where(column + " IS NULL")
+	}
+	return query.Where(column+" = ?", *value)
 }
 
 func enqueueGC(tx *gorm.DB, artifactID string, now time.Time) error {
@@ -332,6 +358,22 @@ func (r *Reconciler) manualBatch(ctx context.Context, batchID, reason string) er
 		}
 		if err := tx.Model(&plugindomain.ReceiveIntent{}).Where("batch_id = ? AND state NOT IN ?", batchID, []string{plugindomain.ReceiveBatchStateCompleted, plugindomain.ReceiveBatchStateAborted}).Updates(map[string]any{"state": plugindomain.ReceiveBatchStateManualRequired, "safe_error": reason, "updated_at": now}).Error; err != nil {
 			return unavailable("mark receive intent manual", err)
+		}
+		var transitions []plugindomain.RevisionProjectionTransition
+		if err := tx.Table("revision_projection_transitions AS t").
+			Select("t.*").
+			Joins("JOIN receive_intents AS i ON i.id = t.intent_id").
+			Where("i.batch_id = ? AND t.state NOT IN ?", batchID, []string{plugindomain.ProjectionTransitionStateCompleted, plugindomain.ProjectionTransitionStateAborted}).
+			Find(&transitions).Error; err != nil {
+			return unavailable("list receive transitions", err)
+		}
+		for _, transition := range transitions {
+			if err := tx.Model(&plugindomain.RevisionProjectionPointer{}).Where("id = ?", transition.PointerID).Updates(map[string]any{"available": false, "updated_at": now}).Error; err != nil {
+				return unavailable("fail close receive pointer", err)
+			}
+			if err := tx.Model(&plugindomain.RevisionProjectionTransition{}).Where("id = ?", transition.ID).Updates(map[string]any{"state": plugindomain.ProjectionTransitionStateManualRequired, "safe_error": reason, "updated_at": now}).Error; err != nil {
+				return unavailable("mark receive transition manual", err)
+			}
 		}
 		return nil
 	})

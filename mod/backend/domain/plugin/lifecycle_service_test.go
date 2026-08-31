@@ -101,8 +101,15 @@ func TestServicePublishStrictlyInspectsActivatesAndSetsDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if version.CommitSHA == nil || *version.CommitSHA != inspection.CommitObjectID || version.ManifestDigest == nil || *version.ManifestDigest != inspection.ManifestDigest || string(version.ManifestSnapshot) != string(inspection.ManifestSnapshot) {
+	if version.RawTagObjectID == nil || *version.RawTagObjectID != inspection.RawTagObjectID || version.CommitSHA == nil || *version.CommitSHA != inspection.CommitObjectID || version.ManifestDigest == nil || *version.ManifestDigest != inspection.ManifestDigest || string(version.ManifestSnapshot) != string(inspection.ManifestSnapshot) {
 		t.Fatalf("stored Version = %#v", version)
+	}
+	var history []PluginVersionHistory
+	if err := db.Where("plugin_id = ? AND tag = ?", aggregate.Plugin.ID, "v1.2.3").Find(&history).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 || history[0].Operation != VersionHistoryOperationPublish || history[0].NewCommitSHA == nil || *history[0].NewCommitSHA != inspection.CommitObjectID {
+		t.Fatalf("publish history = %#v", history)
 	}
 }
 
@@ -133,6 +140,21 @@ func TestServicePublishIsIdempotentAndRejectsCASOrLifecycleConflicts(t *testing.
 	}
 	if versions != 1 {
 		t.Fatalf("Version rows = %d, want 1", versions)
+	}
+	var historyCount int64
+	if err := db.Model(&PluginVersionHistory{}).Where("plugin_id = ? AND tag = ?", aggregate.Plugin.ID, "v1.0.0").Count(&historyCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if historyCount != 1 {
+		t.Fatalf("idempotent publish history rows = %d, want 1", historyCount)
+	}
+
+	sameCommitDifferentTagObject := inspection
+	sameCommitDifferentTagObject.RawTagObjectID = strings.Repeat("e", 40)
+	rawCASInspector := &serviceTestInspector{inspections: []gitservice.PluginSourceInspection{sameCommitDifferentTagObject, sameCommitDifferentTagObject}}
+	rawCASService := newServiceForTest(t, db, &serviceTestAuthorizer{}, &serviceTestProvisioner{}, rawCASInspector)
+	if _, err := rawCASService.Publish(t.Context(), principal, namespace.Slug, aggregate.Plugin.Slug, PublishInput{Tag: "v1.0.0"}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("raw-tag-changing Publish() error = %v, want ErrConflict", err)
 	}
 
 	changedRef := inspection
@@ -192,8 +214,62 @@ func TestServicePublishRestoresTombstoneWithoutRestoringDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if version.Status != VersionStatusAvailable || version.DeletedAt != nil || version.CommitSHA == nil || *version.CommitSHA != inspection.CommitObjectID {
+	if version.Status != VersionStatusAvailable || version.DeletedAt != nil || version.RawTagObjectID == nil || *version.RawTagObjectID != inspection.RawTagObjectID || version.CommitSHA == nil || *version.CommitSHA != inspection.CommitObjectID {
 		t.Fatalf("restored Version = %#v", version)
+	}
+	var history []PluginVersionHistory
+	if err := db.Where("plugin_id = ? AND tag = ?", aggregate.Plugin.ID, "v1.0.0").Find(&history).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 || history[0].Operation != VersionHistoryOperationRestore {
+		t.Fatalf("restore history = %#v", history)
+	}
+}
+
+func TestServicePublishAndDefaultCommandsRejectUnresolvedReceive(t *testing.T) {
+	for _, state := range []string{ReceiveBatchStatePrepared, ReceiveBatchStateFinalizing, ReceiveBatchStateManualRequired} {
+		t.Run(state, func(t *testing.T) {
+			db := newServiceTestDatabase(t)
+			namespace := createServiceTestNamespace(t, db, "security")
+			versionTag := "v1.0.0"
+			oldCommit := strings.Repeat("a", 40)
+			oldRaw := strings.Repeat("1", 40)
+			digest := strings.Repeat("d", 64)
+			snapshot := []byte(`{"name":"scanner"}`)
+			now := time.Now().UTC()
+			version := PluginVersion{ID: uuid.NewString(), Tag: versionTag, Status: VersionStatusAvailable, RawTagObjectID: &oldRaw, CommitSHA: &oldCommit, ManifestDigest: &digest, ManifestSnapshot: snapshot, PublishedAt: now, CreatedAt: now, UpdatedAt: now}
+			inspection := serviceTestInspection("1", "a", "d", `{"name":"scanner"}`)
+			inspection.ManifestDigest = digest
+			inspection.ManifestSnapshot = snapshot
+			inspector := &serviceTestInspector{inspections: []gitservice.PluginSourceInspection{inspection, inspection}}
+			service := newServiceForTest(t, db, &serviceTestAuthorizer{}, &serviceTestProvisioner{}, inspector)
+			principal := serviceTestPrincipal(t)
+			aggregate := createServiceTestAggregate(t, db, namespace.ID, "scanner", PluginStatusActive, VisibilityPublic, RepositoryStatusReady, now)
+			version.PluginID = aggregate.Plugin.ID
+			if err := db.Create(&version).Error; err != nil {
+				t.Fatal(err)
+			}
+			batchID := uuid.NewString()
+			proposedRaw, proposedCommit := strings.Repeat("2", 40), strings.Repeat("b", 40)
+			for _, record := range []any{
+				&ReceiveBatch{ID: batchID, PluginID: aggregate.Plugin.ID, State: state, CorrelationID: uuid.NewString(), CreatedAt: now, UpdatedAt: now},
+				&ReceiveIntent{ID: uuid.NewString(), BatchID: batchID, PluginID: aggregate.Plugin.ID, Operation: ReceiveOperationMove, Tag: versionTag, ExpectedOldObjectID: oldRaw, ProposedNewObjectID: &proposedRaw, ExpectedOldCommitSHA: oldCommit, ProposedNewCommitSHA: &proposedCommit, ExpectedVersionStatus: VersionStatusAvailable, State: state, CreatedAt: now, UpdatedAt: now},
+			} {
+				if err := db.Create(record).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if _, err := service.Publish(t.Context(), principal, namespace.Slug, aggregate.Plugin.Slug, PublishInput{Tag: versionTag}); !errors.Is(err, ErrConflict) {
+				t.Fatalf("Publish() error = %v, want ErrConflict", err)
+			}
+			if err := service.SetDefaultVersion(t.Context(), principal, namespace.Slug, aggregate.Plugin.Slug, versionTag); !errors.Is(err, ErrConflict) {
+				t.Fatalf("SetDefaultVersion() error = %v, want ErrConflict", err)
+			}
+			if err := service.ClearDefaultVersion(t.Context(), principal, namespace.Slug, aggregate.Plugin.Slug); !errors.Is(err, ErrConflict) {
+				t.Fatalf("ClearDefaultVersion() error = %v, want ErrConflict", err)
+			}
+		})
 	}
 }
 
@@ -312,6 +388,7 @@ func createServiceTestVersion(t *testing.T, db *gorm.DB, pluginID, tag, status, 
 	version := PluginVersion{ID: uuid.NewString(), PluginID: pluginID, Tag: tag, Status: status, PublishedAt: publishedAt, CreatedAt: publishedAt, UpdatedAt: publishedAt}
 	if status == VersionStatusAvailable {
 		digest := strings.Repeat("d", 64)
+		version.RawTagObjectID = &commit
 		version.CommitSHA = &commit
 		version.ManifestDigest = &digest
 		version.ManifestSnapshot = []byte(`{"name":"scanner"}`)

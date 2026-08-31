@@ -75,19 +75,20 @@ type VersionPage struct {
 }
 
 type Service struct {
-	db          *gorm.DB
-	repository  *RepositoryStore
-	authorizer  auth.Authorizer
-	provisioner gitservice.RepositoryProvisioner
-	inspector   gitservice.PluginSourceInspector
-	locks       *keyedLocks
-	now         func() time.Time
-	newID       func() string
+	db           *gorm.DB
+	repository   *RepositoryStore
+	authorizer   auth.Authorizer
+	provisioner  gitservice.RepositoryProvisioner
+	inspector    gitservice.PluginSourceInspector
+	locks        *keyedLocks
+	effectLocker EffectLocker
+	now          func() time.Time
+	newID        func() string
 }
 
-func NewService(db *gorm.DB, authorizer auth.Authorizer, provisioner gitservice.RepositoryProvisioner, inspector gitservice.PluginSourceInspector) (*Service, error) {
-	if db == nil || authorizer == nil || provisioner == nil {
-		return nil, errors.New("plugin service requires database, authorizer, and repository provisioner")
+func NewService(db *gorm.DB, authorizer auth.Authorizer, provisioner gitservice.RepositoryProvisioner, inspector gitservice.PluginSourceInspector, effectLocker EffectLocker) (*Service, error) {
+	if db == nil || authorizer == nil || provisioner == nil || effectLocker == nil {
+		return nil, errors.New("plugin service requires database, authorizer, repository provisioner, and effect lock")
 	}
 	repository, err := NewRepository(db)
 	if err != nil {
@@ -95,7 +96,7 @@ func NewService(db *gorm.DB, authorizer auth.Authorizer, provisioner gitservice.
 	}
 	return &Service{
 		db: db, repository: repository, authorizer: authorizer, provisioner: provisioner, inspector: inspector,
-		locks: newKeyedLocks(), now: func() time.Time { return time.Now().UTC() }, newID: uuid.NewString,
+		locks: newKeyedLocks(), effectLocker: effectLocker, now: func() time.Time { return time.Now().UTC() }, newID: uuid.NewString,
 	}, nil
 }
 
@@ -193,6 +194,11 @@ func (service *Service) Archive(ctx context.Context, principal auth.Principal, n
 	}
 	unlock := service.locks.lock("plugin:" + aggregate.Plugin.ID)
 	defer unlock()
+	effectUnlock, err := service.effectLocker.LockPlugin(ctx, aggregate.Plugin.ID)
+	if err != nil {
+		return ErrUnavailable
+	}
+	defer func() { _ = effectUnlock() }()
 	aggregate, err = service.repository.FindBySlug(ctx, namespace.ID, pluginSlug)
 	if err != nil {
 		return service.mapMutationLookup(err)
@@ -226,6 +232,11 @@ func (service *Service) Restore(ctx context.Context, principal auth.Principal, n
 	}
 	unlock := service.locks.lock("plugin:" + aggregate.Plugin.ID)
 	defer unlock()
+	effectUnlock, err := service.effectLocker.LockPlugin(ctx, aggregate.Plugin.ID)
+	if err != nil {
+		return ErrUnavailable
+	}
+	defer func() { _ = effectUnlock() }()
 	aggregate, err = service.repository.FindBySlug(ctx, namespace.ID, pluginSlug)
 	if err != nil {
 		return service.mapMutationLookup(err)
@@ -260,6 +271,11 @@ func (service *Service) SetVisibility(ctx context.Context, principal auth.Princi
 	}
 	unlock := service.locks.lock("plugin:" + aggregate.Plugin.ID)
 	defer unlock()
+	effectUnlock, err := service.effectLocker.LockPlugin(ctx, aggregate.Plugin.ID)
+	if err != nil {
+		return ErrUnavailable
+	}
+	defer func() { _ = effectUnlock() }()
 	aggregate, err = service.repository.FindBySlug(ctx, namespace.ID, pluginSlug)
 	if err != nil {
 		return service.mapMutationLookup(err)
@@ -354,6 +370,11 @@ func (service *Service) Publish(ctx context.Context, principal auth.Principal, n
 
 	unlock := service.locks.lock("plugin:" + aggregate.Plugin.ID)
 	defer unlock()
+	effectUnlock, err := service.effectLocker.LockPlugin(ctx, aggregate.Plugin.ID)
+	if err != nil {
+		return VersionView{}, ErrUnavailable
+	}
+	defer func() { _ = effectUnlock() }()
 	aggregate, err = service.repository.FindBySlug(ctx, namespace.ID, pluginSlug)
 	if err != nil {
 		return VersionView{}, service.mapMutationLookup(err)
@@ -397,16 +418,20 @@ func (service *Service) Publish(ctx context.Context, principal auth.Principal, n
 		if currentPlugin.Status == PluginStatusArchived || currentRepository.Status != RepositoryStatusReady {
 			return ErrConflict
 		}
+		if unresolvedReceiveExists(tx, aggregate.Plugin.ID) {
+			return ErrConflict
+		}
 
 		var version PluginVersion
 		err := tx.Where("plugin_id = ? AND tag = ?", aggregate.Plugin.ID, input.Tag).Take(&version).Error
+		historyOperation := ""
 		switch {
 		case errors.Is(err, gorm.ErrRecordNotFound):
-			commit := inspection.CommitObjectID
+			rawTag, commit := inspection.RawTagObjectID, inspection.CommitObjectID
 			digest := inspection.ManifestDigest
 			version = PluginVersion{
 				ID: service.newID(), PluginID: aggregate.Plugin.ID, Tag: input.Tag, Status: VersionStatusAvailable,
-				CommitSHA: &commit, ManifestDigest: &digest, ManifestSnapshot: append([]byte(nil), inspection.ManifestSnapshot...),
+				RawTagObjectID: &rawTag, CommitSHA: &commit, ManifestDigest: &digest, ManifestSnapshot: append([]byte(nil), inspection.ManifestSnapshot...),
 				PublishedAt: now, CreatedAt: now, UpdatedAt: now,
 			}
 			if err := tx.Create(&version).Error; err != nil {
@@ -415,15 +440,16 @@ func (service *Service) Publish(ctx context.Context, principal auth.Principal, n
 				}
 				return err
 			}
+			historyOperation = VersionHistoryOperationPublish
 		case err != nil:
 			return err
 		case version.Status == VersionStatusDeleted:
-			commit := inspection.CommitObjectID
+			rawTag, commit := inspection.RawTagObjectID, inspection.CommitObjectID
 			digest := inspection.ManifestDigest
 			result := tx.Exec(`UPDATE plugin_versions
-				SET status = ?, commit_sha = ?, manifest_digest = ?, manifest_snapshot = ?, deleted_at = NULL, published_at = ?, updated_at = ?
+				SET status = ?, raw_tag_object_id = ?, commit_sha = ?, manifest_digest = ?, manifest_snapshot = ?, deleted_at = NULL, published_at = ?, updated_at = ?
 				WHERE id = ? AND plugin_id = ? AND tag = ? AND status = ?`,
-				VersionStatusAvailable, commit, digest, append([]byte(nil), inspection.ManifestSnapshot...), now, now,
+				VersionStatusAvailable, rawTag, commit, digest, append([]byte(nil), inspection.ManifestSnapshot...), now, now,
 				version.ID, aggregate.Plugin.ID, input.Tag, VersionStatusDeleted)
 			if result.Error != nil {
 				return result.Error
@@ -431,16 +457,27 @@ func (service *Service) Publish(ctx context.Context, principal auth.Principal, n
 			if result.RowsAffected != 1 {
 				return ErrConflict
 			}
-			version.Status, version.CommitSHA, version.ManifestDigest = VersionStatusAvailable, &commit, &digest
+			version.Status, version.RawTagObjectID, version.CommitSHA, version.ManifestDigest = VersionStatusAvailable, &rawTag, &commit, &digest
 			version.ManifestSnapshot, version.DeletedAt, version.PublishedAt, version.UpdatedAt = append([]byte(nil), inspection.ManifestSnapshot...), nil, now, now
+			historyOperation = VersionHistoryOperationRestore
 		case version.Status == VersionStatusAvailable:
-			if version.CommitSHA == nil || *version.CommitSHA != inspection.CommitObjectID ||
+			if version.RawTagObjectID == nil || *version.RawTagObjectID != inspection.RawTagObjectID ||
+				version.CommitSHA == nil || *version.CommitSHA != inspection.CommitObjectID ||
 				version.ManifestDigest == nil || *version.ManifestDigest != inspection.ManifestDigest ||
 				!bytes.Equal(version.ManifestSnapshot, inspection.ManifestSnapshot) {
 				return ErrConflict
 			}
 		default:
 			return ErrConflict
+		}
+		if historyOperation != "" {
+			newCommit := inspection.CommitObjectID
+			if err := tx.Create(&PluginVersionHistory{
+				ID: service.newID(), PluginID: aggregate.Plugin.ID, Tag: input.Tag, Operation: historyOperation,
+				NewCommitSHA: &newCommit, CorrelationID: service.newID(), CreatedAt: now,
+			}).Error; err != nil {
+				return err
+			}
 		}
 
 		updates := map[string]any{}
@@ -490,6 +527,14 @@ func (service *Service) SetDefaultVersion(ctx context.Context, principal auth.Pr
 	}
 	unlock := service.locks.lock("plugin:" + aggregate.Plugin.ID)
 	defer unlock()
+	effectUnlock, err := service.effectLocker.LockPlugin(ctx, aggregate.Plugin.ID)
+	if err != nil {
+		return ErrUnavailable
+	}
+	defer func() { _ = effectUnlock() }()
+	if unresolvedReceiveExists(service.db.WithContext(ctx), aggregate.Plugin.ID) {
+		return ErrConflict
+	}
 	if err := SetDefaultVersion(ctx, service.db, namespace.ID, aggregate.Plugin.ID, tag); err != nil {
 		switch {
 		case errors.Is(err, ErrVersionNotAvailable):
@@ -516,6 +561,14 @@ func (service *Service) ClearDefaultVersion(ctx context.Context, principal auth.
 	}
 	unlock := service.locks.lock("plugin:" + aggregate.Plugin.ID)
 	defer unlock()
+	effectUnlock, err := service.effectLocker.LockPlugin(ctx, aggregate.Plugin.ID)
+	if err != nil {
+		return ErrUnavailable
+	}
+	defer func() { _ = effectUnlock() }()
+	if unresolvedReceiveExists(service.db.WithContext(ctx), aggregate.Plugin.ID) {
+		return ErrConflict
+	}
 	if err := service.repository.ClearDefaultVersion(ctx, namespace.ID, aggregate.Plugin.ID, service.now()); err != nil {
 		switch {
 		case errors.Is(err, ErrVersionNotAvailable):
@@ -527,6 +580,14 @@ func (service *Service) ClearDefaultVersion(ctx context.Context, principal auth.
 		}
 	}
 	return nil
+}
+
+func unresolvedReceiveExists(db *gorm.DB, pluginID string) bool {
+	var count int64
+	return db.Model(&ReceiveIntent{}).
+		Where("plugin_id = ? AND state IN ?", pluginID, []string{ReceiveBatchStatePrepared, ReceiveBatchStateFinalizing, ReceiveBatchStateManualRequired}).
+		Limit(1).
+		Count(&count).Error != nil || count != 0
 }
 
 func (service *Service) exactAggregate(ctx context.Context, namespaceSlug, pluginSlug string) (identitymodel.Namespace, Aggregate, error) {

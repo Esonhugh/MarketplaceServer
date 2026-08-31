@@ -11,20 +11,27 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestPrepareRejectsAvailableTransitionWithStaleCommitFacts(t *testing.T) {
+func TestPrepareRejectsAvailableTransitionWithStaleSourceFacts(t *testing.T) {
 	for _, test := range []struct {
 		name    string
 		command gitservice.ReceiveTagCommand
 	}{
 		{
-			name: "move",
+			name: "move commit",
 			command: gitservice.ReceiveTagCommand{
 				Tag: "v1.0.0", RefName: "refs/tags/v1.0.0", Operation: gitservice.ReceiveTagMove,
 				OldObjectID: objectID("1"), NewObjectID: objectID("2"), OldCommitObjectID: objectID("f"), NewCommitObjectID: objectID("b"),
 			},
 		},
 		{
-			name: "delete",
+			name: "move raw tag object",
+			command: gitservice.ReceiveTagCommand{
+				Tag: "v1.0.0", RefName: "refs/tags/v1.0.0", Operation: gitservice.ReceiveTagMove,
+				OldObjectID: objectID("f"), NewObjectID: objectID("2"), OldCommitObjectID: objectID("a"), NewCommitObjectID: objectID("b"),
+			},
+		},
+		{
+			name: "delete commit",
 			command: gitservice.ReceiveTagCommand{
 				Tag: "v1.0.0", RefName: "refs/tags/v1.0.0", Operation: gitservice.ReceiveTagDelete,
 				OldObjectID: objectID("1"), NewObjectID: zeroObjectID(), OldCommitObjectID: objectID("f"),
@@ -215,8 +222,8 @@ func TestResolveUnexpectedOrCorruptMoveRequiresManualRecovery(t *testing.T) {
 
 func TestResolveMixedMultiTagOutcomeRequiresManualRecovery(t *testing.T) {
 	fixture := newCoordinatorFixture(t)
-	fixture.addAvailableVersion(t, "v1.0.0", objectID("a"), false)
-	fixture.addAvailableVersion(t, "v1.1.0", objectID("b"), false)
+	fixture.addAvailableVersion(t, "v1.0.0", objectID("a"), false, objectID("1"))
+	fixture.addAvailableVersion(t, "v1.1.0", objectID("b"), false, objectID("3"))
 
 	prepared := fixture.prepare(t, []gitservice.ReceiveTagCommand{
 		{Tag: "v1.0.0", RefName: "refs/tags/v1.0.0", Operation: gitservice.ReceiveTagMove, OldObjectID: objectID("1"), NewObjectID: objectID("2"), OldCommitObjectID: objectID("a"), NewCommitObjectID: objectID("c")},

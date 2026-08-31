@@ -157,22 +157,29 @@ func (m *Mod) PostInit(hub *kernel.Hub) error {
 	if err != nil {
 		return fmt.Errorf("assemble token service: %w", err)
 	}
-	pluginService, err := plugindomain.NewService(db, authorizer, repositoryProvisioner, pluginSourceInspector)
-	if err != nil {
-		return fmt.Errorf("assemble plugin lifecycle service: %w", err)
-	}
 	pluginLifecycle := m.pluginLifecycle
+	receiveCoordinator := m.receiveCoordinator
+	var effectLocker plugindomain.EffectLocker
+	if isNil(pluginLifecycle) || isNil(receiveCoordinator) {
+		effectLocker, err = plugindomain.NewDatabaseEffectLocker(db, 0, 0)
+		if err != nil {
+			return fmt.Errorf("assemble plugin effect lock: %w", err)
+		}
+	}
 	if isNil(pluginLifecycle) {
+		pluginService, serviceErr := plugindomain.NewService(db, authorizer, repositoryProvisioner, pluginSourceInspector, effectLocker)
+		if serviceErr != nil {
+			return fmt.Errorf("assemble plugin lifecycle service: %w", serviceErr)
+		}
 		pluginLifecycle = pluginhandler.NewDomainLifecycleAdapter(pluginService)
 	}
 	if isNil(pluginLifecycle) {
 		return fmt.Errorf("assemble plugin lifecycle handler adapter: domain lifecycle service is incomplete")
 	}
-	receiveCoordinator := m.receiveCoordinator
 	if isNil(receiveCoordinator) {
-		coordinator, err := pluginreceive.NewCoordinator(db, projectionBuilder, pluginreceive.Options{})
-		if err != nil {
-			return fmt.Errorf("assemble plugin receive coordinator: %w", err)
+		coordinator, coordinatorErr := pluginreceive.NewCoordinator(db, projectionBuilder, pluginreceive.Options{EffectLocker: effectLocker})
+		if coordinatorErr != nil {
+			return fmt.Errorf("assemble plugin receive coordinator: %w", coordinatorErr)
 		}
 		receiveCoordinator = coordinator
 	}

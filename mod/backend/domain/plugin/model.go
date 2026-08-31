@@ -73,7 +73,7 @@ type PluginVersion struct {
 	ID               string     `gorm:"type:char(36);primaryKey"`
 	PluginID         string     `gorm:"type:char(36);not null;uniqueIndex:uidx_plugin_version_tag"`
 	Tag              string     `gorm:"size:255;not null;uniqueIndex:uidx_plugin_version_tag"`
-	Status           string     `gorm:"size:32;not null;check:chk_plugin_versions_lifecycle,status IN ('available','deleted') AND ((status = 'available' AND commit_sha IS NOT NULL AND manifest_digest IS NOT NULL AND manifest_snapshot IS NOT NULL AND deleted_at IS NULL) OR (status = 'deleted' AND raw_tag_object_id IS NULL AND commit_sha IS NULL AND manifest_digest IS NULL AND manifest_snapshot IS NULL AND deleted_at IS NOT NULL))"`
+	Status           string     `gorm:"size:32;not null;check:chk_plugin_versions_lifecycle,status IN ('available','deleted') AND ((status = 'available' AND raw_tag_object_id IS NOT NULL AND commit_sha IS NOT NULL AND manifest_digest IS NOT NULL AND manifest_snapshot IS NOT NULL AND deleted_at IS NULL) OR (status = 'deleted' AND raw_tag_object_id IS NULL AND commit_sha IS NULL AND manifest_digest IS NULL AND manifest_snapshot IS NULL AND deleted_at IS NOT NULL))"`
 	RawTagObjectID   *string    `gorm:"size:255"`
 	CommitSHA        *string    `gorm:"size:255"`
 	ManifestDigest   *string    `gorm:"type:char(64)"`

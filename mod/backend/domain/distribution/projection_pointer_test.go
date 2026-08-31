@@ -125,6 +125,7 @@ func TestResolvePluginFailsClosedForInvalidProjectionOrResourceState(t *testing.
 					Where("id = ?", fixture.versionID).
 					Updates(map[string]any{
 						"status":            plugindomain.VersionStatusDeleted,
+						"raw_tag_object_id": nil,
 						"commit_sha":        nil,
 						"manifest_digest":   nil,
 						"manifest_snapshot": nil,
@@ -223,7 +224,7 @@ func newPluginProjectionFixture(t *testing.T, withPointer bool) pluginProjection
 		&identitymodel.Namespace{ID: namespaceID, Kind: identitymodel.NamespaceKindTeam, Slug: "security", DisplayName: "Security", CreatedAt: now, UpdatedAt: now},
 		&plugindomain.Plugin{ID: pluginID, NamespaceID: namespaceID, Slug: "scanner", Visibility: plugindomain.VisibilityPublic, Status: plugindomain.PluginStatusActive, CreatedAt: now, UpdatedAt: now},
 		&plugindomain.Repository{ID: pluginID, StorageKey: uuid.NewString(), Status: plugindomain.RepositoryStatusReady, CreatedAt: now, UpdatedAt: now},
-		&plugindomain.PluginVersion{ID: versionID, PluginID: pluginID, Tag: "v1.0.0", Status: plugindomain.VersionStatusAvailable, CommitSHA: &commitSHA, ManifestDigest: &manifestDigest, ManifestSnapshot: []byte(`{}`), PublishedAt: now, CreatedAt: now, UpdatedAt: now},
+		&plugindomain.PluginVersion{ID: versionID, PluginID: pluginID, Tag: "v1.0.0", Status: plugindomain.VersionStatusAvailable, RawTagObjectID: &commitSHA, CommitSHA: &commitSHA, ManifestDigest: &manifestDigest, ManifestSnapshot: []byte(`{}`), PublishedAt: now, CreatedAt: now, UpdatedAt: now},
 		&MarketplaceTemplate{ID: templateID, NamespaceID: namespaceID, Slug: "web", Name: "Web", Visibility: plugindomain.VisibilityPublic, Status: StatusActive, CreatedAt: now, UpdatedAt: now},
 		&MarketplaceRevision{ID: revisionID, TemplateID: templateID, Revision: 1, ContentJSON: []byte(`{"name":"web"}`), ContentDigest: strings.Repeat("c", 64), Status: StatusActive, PublishedAt: now, CreatedAt: now},
 		&PluginDistribution{ID: distributionID.String(), TemplateID: templateID, PluginID: pluginID, PluginTag: "v1.0.0", RepositoryID: pluginID, TagName: "v1.0.0", SourceTagType: "lightweight", SourceCommitSHA: commitSHA, SourceTreeSHA: strings.Repeat("d", 40), DistributionSHA: strings.Repeat("e", 40), StorageKey: legacyStorageKey, ContentDigest: strings.Repeat("f", 64), Status: StatusActive, CreatedAt: now, UpdatedAt: now},

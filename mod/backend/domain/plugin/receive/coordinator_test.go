@@ -55,7 +55,7 @@ func TestPrepareAvailableMoveStagesEveryRevisionInOneBatch(t *testing.T) {
 	fixture := newCoordinatorFixture(t)
 	oldCommit := objectID("a")
 	newCommit := objectID("b")
-	fixture.addAvailableVersion(t, "v1.0.0", oldCommit, true)
+	fixture.addAvailableVersion(t, "v1.0.0", oldCommit, true, objectID("1"))
 	fixture.addRevisionSelection(t, "v1.0.0", true)
 	fixture.addRevisionSelection(t, "v1.0.0", false)
 	fixture.builder.sourceCommitByTag = map[string]string{"v1.0.0": newCommit}
@@ -99,8 +99,8 @@ func TestPrepareAvailableMoveStagesEveryRevisionInOneBatch(t *testing.T) {
 
 func TestPrepareMultiTagBatchPersistsOnlyAvailableVersions(t *testing.T) {
 	fixture := newCoordinatorFixture(t)
-	fixture.addAvailableVersion(t, "v1.0.0", objectID("a"), false)
-	fixture.addAvailableVersion(t, "v1.1.0", objectID("b"), false)
+	fixture.addAvailableVersion(t, "v1.0.0", objectID("a"), false, objectID("1"))
+	fixture.addAvailableVersion(t, "v1.1.0", objectID("b"), false, objectID("3"))
 
 	prepared := fixture.prepare(t, []gitservice.ReceiveTagCommand{
 		{Tag: "v1.0.0", RefName: "refs/tags/v1.0.0", Operation: gitservice.ReceiveTagMove, OldObjectID: objectID("1"), NewObjectID: objectID("2"), OldCommitObjectID: objectID("a"), NewCommitObjectID: objectID("c")},
@@ -184,11 +184,15 @@ func (fixture coordinatorFixture) prepare(t *testing.T, tags []gitservice.Receiv
 	return prepared
 }
 
-func (fixture coordinatorFixture) addAvailableVersion(t *testing.T, tag, commit string, makeDefault bool) {
+func (fixture coordinatorFixture) addAvailableVersion(t *testing.T, tag, commit string, makeDefault bool, rawTagObjectID ...string) {
 	t.Helper()
 	now := time.Now().UTC()
 	digest := strings.Repeat("f", 64)
-	version := &plugindomain.PluginVersion{ID: uuid.NewString(), PluginID: fixture.pluginID, Tag: tag, Status: plugindomain.VersionStatusAvailable, CommitSHA: &commit, ManifestDigest: &digest, ManifestSnapshot: []byte(`{"name":"scanner"}`), PublishedAt: now, CreatedAt: now, UpdatedAt: now}
+	rawTag := objectID("1")
+	if len(rawTagObjectID) != 0 {
+		rawTag = rawTagObjectID[0]
+	}
+	version := &plugindomain.PluginVersion{ID: uuid.NewString(), PluginID: fixture.pluginID, Tag: tag, Status: plugindomain.VersionStatusAvailable, RawTagObjectID: &rawTag, CommitSHA: &commit, ManifestDigest: &digest, ManifestSnapshot: []byte(`{"name":"scanner"}`), PublishedAt: now, CreatedAt: now, UpdatedAt: now}
 	if err := fixture.db.Create(version).Error; err != nil {
 		t.Fatal(err)
 	}

@@ -44,9 +44,43 @@ func TestReconcileReceivesFinalizesAcceptedRefIdempotently(t *testing.T) {
 	}
 }
 
+func TestReconcileReceivesRejectsStaleRawTagVersionCAS(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.addReceive(t, plugindomain.ReceiveBatchStatePrepared, "v1.0.0", oid("a"), oid("b"))
+	fixture.refs.refs["refs/tags/v1.0.0"] = gitservice.ObservedReceiveRef{RefName: "refs/tags/v1.0.0", ObjectID: oid("b"), Exists: true}
+	if err := fixture.db.Model(&plugindomain.PluginVersion{}).Where("plugin_id = ? AND tag = ?", fixture.pluginID, "v1.0.0").Update("raw_tag_object_id", oid("f")).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := fixture.reconciler.ReconcileReceives(t.Context()); err == nil {
+		t.Fatal("ReconcileReceives() completed against a stale raw tag object ID")
+	}
+	var version plugindomain.PluginVersion
+	if err := fixture.db.First(&version, "plugin_id = ? AND tag = ?", fixture.pluginID, "v1.0.0").Error; err != nil {
+		t.Fatal(err)
+	}
+	if version.RawTagObjectID == nil || *version.RawTagObjectID != oid("f") || version.CommitSHA == nil || *version.CommitSHA != oid("a") {
+		t.Fatalf("stale-CAS Version mutated: %#v", version)
+	}
+}
+
 func TestReconcileReceivesMarksUnexpectedRefManualWithoutWritingGit(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.addReceive(t, plugindomain.ReceiveBatchStateFinalizing, "v1.0.0", oid("a"), oid("b"))
+	var intent plugindomain.ReceiveIntent
+	if err := fixture.db.First(&intent, "plugin_id = ? AND tag = ?", fixture.pluginID, "v1.0.0").Error; err != nil {
+		t.Fatal(err)
+	}
+	artifactID, pointerID := uuid.NewString(), uuid.NewString()
+	for _, record := range []any{
+		&plugindomain.ProjectionArtifact{ID: artifactID, Kind: plugindomain.ArtifactKindPlugin, PluginID: fixture.pluginID, Tag: "v1.0.0", SourceObjectID: oid("b"), SourceCommitSHA: oid("b"), ContentDigest: strings.Repeat("d", 64), StorageKey: "staged-" + artifactID, State: plugindomain.ArtifactStateStaged, CreatedAt: fixture.now, UpdatedAt: fixture.now},
+		&plugindomain.RevisionProjectionPointer{ID: pointerID, RevisionID: uuid.NewString(), PluginID: fixture.pluginID, Tag: "v1.0.0", Generation: 1, Available: false, UpdatedAt: fixture.now},
+		&plugindomain.RevisionProjectionTransition{ID: uuid.NewString(), IntentID: intent.ID, RevisionID: uuid.NewString(), PointerID: pointerID, ExpectedGeneration: 1, StagedArtifactID: &artifactID, State: plugindomain.ProjectionTransitionStatePending, CreatedAt: fixture.now, UpdatedAt: fixture.now},
+	} {
+		if err := fixture.db.Create(record).Error; err != nil {
+			t.Fatalf("create %T: %v", record, err)
+		}
+	}
 	fixture.refs.refs["refs/tags/v1.0.0"] = gitservice.ObservedReceiveRef{RefName: "refs/tags/v1.0.0", ObjectID: oid("f"), Exists: true}
 
 	if _, err := fixture.reconciler.ReconcileReceives(t.Context()); err != nil {
@@ -68,6 +102,20 @@ func TestReconcileReceivesMarksUnexpectedRefManualWithoutWritingGit(t *testing.T
 	}
 	if version.CommitSHA == nil || *version.CommitSHA != oid("a") {
 		t.Fatal("manual recovery changed version")
+	}
+	var transition plugindomain.RevisionProjectionTransition
+	if err := fixture.db.First(&transition, "intent_id = ?", intent.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if transition.State != plugindomain.ProjectionTransitionStateManualRequired || transition.SafeError != "unexpected_ref" {
+		t.Fatalf("transition = %#v", transition)
+	}
+	var pointer plugindomain.RevisionProjectionPointer
+	if err := fixture.db.First(&pointer, "id = ?", pointerID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if pointer.Available {
+		t.Fatalf("manual recovery pointer remained available: %#v", pointer)
 	}
 }
 
@@ -144,7 +192,7 @@ func (f fixture) addReceive(t *testing.T, state, tag, old, proposed string) {
 	t.Helper()
 	batchID, intentID := uuid.NewString(), uuid.NewString()
 	digest := strings.Repeat("c", 64)
-	if err := f.db.Create(&plugindomain.PluginVersion{ID: uuid.NewString(), PluginID: f.pluginID, Tag: tag, Status: plugindomain.VersionStatusAvailable, CommitSHA: &old, ManifestDigest: &digest, ManifestSnapshot: []byte(`{}`), PublishedAt: f.now, CreatedAt: f.now, UpdatedAt: f.now}).Error; err != nil {
+	if err := f.db.Create(&plugindomain.PluginVersion{ID: uuid.NewString(), PluginID: f.pluginID, Tag: tag, Status: plugindomain.VersionStatusAvailable, RawTagObjectID: &old, CommitSHA: &old, ManifestDigest: &digest, ManifestSnapshot: []byte(`{}`), PublishedAt: f.now, CreatedAt: f.now, UpdatedAt: f.now}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := f.db.Create(&plugindomain.ReceiveBatch{ID: batchID, PluginID: f.pluginID, State: state, CorrelationID: "session", CreatedAt: f.now, UpdatedAt: f.now}).Error; err != nil {
