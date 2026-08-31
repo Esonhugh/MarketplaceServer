@@ -1,15 +1,19 @@
 package git
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Esonhugh/MarketplaceServer/pkg/gitservice"
 )
@@ -399,6 +403,160 @@ func (r fakeReceiveRefReader) ReadRef(_ context.Context, refName string) (gitser
 	return ref, nil
 }
 
+func TestReceiveHookClientCancellationUnblocksProcReceive(t *testing.T) {
+	socketDirectory, err := os.MkdirTemp("", "receive-hook-cancel-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(socketDirectory)
+	listener, err := net.Listen("unix", filepath.Join(socketDirectory, "hook.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	serverDone := make(chan struct{})
+	go func() {
+		connection, acceptErr := listener.Accept()
+		if acceptErr == nil {
+			defer connection.Close()
+			reader := bufio.NewReader(connection)
+			_, _ = reader.ReadString('\n')
+			_, _ = io.ReadAll(reader)
+			<-ctx.Done()
+		}
+		close(serverDone)
+	}()
+
+	started := time.Now()
+	err = runReceiveHookClient(ctx, "proc-receive", listener.Addr().String(), strings.NewReader("request"), io.Discard)
+	if err == nil {
+		t.Fatal("runReceiveHookClient() succeeded after context cancellation")
+	}
+	if time.Since(started) > time.Second {
+		t.Fatal("runReceiveHookClient() did not promptly unblock after context cancellation")
+	}
+	<-serverDone
+}
+
+func TestReceiveHookSessionCancellationClosesAcceptedConnection(t *testing.T) {
+	gitBinary := receiveTestGit(t)
+	repository := initReceiveTestRepository(t, gitBinary, "sha1")
+	service := &Service{gitBinary: gitBinary}
+	inspector := &pluginSourceInspector{}
+	socketDirectory, err := os.MkdirTemp("", "receive-session-cancel-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(socketDirectory)
+	listener, err := net.Listen("unix", filepath.Join(socketDirectory, "hook.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &receiveHookSession{
+		listener: listener, done: make(chan error, 1), service: service, inspector: inspector,
+		context:        receiveContext{repositoryID: "plugin-id", pluginName: "plugin"},
+		repositoryPath: repository, sessionID: "session", cancel: cancel,
+	}
+	go session.serve(ctx)
+
+	connection, err := net.Dial("unix", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	if _, err := io.WriteString(connection, "proc-receive\n000"); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.Abort()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Abort() did not close the accepted hook connection")
+	}
+}
+
+func TestReceiveHookSessionWaitAllowsSuccessfulBranchOnlyReceive(t *testing.T) {
+	socketDirectory, err := os.MkdirTemp("", "receive-session-wait-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(socketDirectory)
+	listener, err := net.Listen("unix", filepath.Join(socketDirectory, "hook.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &receiveHookSession{listener: listener, done: make(chan error, 1), cancel: cancel}
+	go session.serve(ctx)
+
+	connection, err := net.Dial("unix", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(connection, "pre-receive\ncommand\n"); err != nil {
+		t.Fatal(err)
+	}
+	if unix, ok := connection.(*net.UnixConn); ok {
+		_ = unix.CloseWrite()
+	}
+	_ = connection.Close()
+
+	if err := session.Wait(nil); err != nil {
+		t.Fatalf("Wait(nil) error = %v, want successful branch-only receive", err)
+	}
+}
+
+func TestPreReceiveHookReturnsWithoutWaitingForResponse(t *testing.T) {
+	socketDirectory, err := os.MkdirTemp("", "receive-hook-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(socketDirectory)
+	listener, err := net.Listen("unix", filepath.Join(socketDirectory, "hook.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	serverDone := make(chan error, 1)
+	go func() {
+		connection, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			serverDone <- acceptErr
+			return
+		}
+		defer connection.Close()
+		payload, readErr := io.ReadAll(connection)
+		if readErr != nil {
+			serverDone <- readErr
+			return
+		}
+		if got, want := string(payload), "pre-receive\ncommand\n"; got != want {
+			serverDone <- fmt.Errorf("hook payload = %q, want %q", got, want)
+			return
+		}
+		serverDone <- nil
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := runReceiveHookClient(ctx, "pre-receive", listener.Addr().String(), strings.NewReader("command\n"), io.Discard); err != nil {
+		t.Fatalf("runReceiveHookClient() error = %v", err)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRealGitClientProtectedReceiveAllowsCanonicalTagAndOrdinaryBranch(t *testing.T) {
 	gitBinary := receiveTestGit(t)
 	repository := initReceiveTestRepository(t, gitBinary, "sha1")
@@ -770,6 +928,7 @@ func main() {
 	for _, unusedImport := range [][]byte{
 		[]byte("\t\"net\"\n"),
 		[]byte("\t\"path/filepath\"\n"),
+		[]byte("\t\"sync\"\n"),
 		[]byte("\t\"github.com/google/uuid\"\n"),
 	} {
 		receiveSource = bytes.Replace(receiveSource, unusedImport, nil, 1)
@@ -892,6 +1051,8 @@ func initReceiveTestWorktree(t *testing.T, gitBinary, objectFormat string) strin
 	runReceiveTestGit(t, gitBinary, worktree, "init", "--object-format="+objectFormat)
 	runReceiveTestGit(t, gitBinary, worktree, "config", "user.name", "Receive Test")
 	runReceiveTestGit(t, gitBinary, worktree, "config", "user.email", "receive@example.invalid")
+	runReceiveTestGit(t, gitBinary, worktree, "config", "commit.gpgSign", "false")
+	runReceiveTestGit(t, gitBinary, worktree, "config", "tag.gpgSign", "false")
 	return worktree
 }
 

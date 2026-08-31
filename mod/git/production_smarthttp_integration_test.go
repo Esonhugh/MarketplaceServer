@@ -142,6 +142,8 @@ func TestProductionAPIKeyRealGitPushAndClone(t *testing.T) {
 	run(source, "init")
 	run(source, "config", "user.name", "Marketplace Test")
 	run(source, "config", "user.email", "marketplace@example.invalid")
+	run(source, "config", "commit.gpgSign", "false")
+	run(source, "config", "tag.gpgSign", "false")
 	if err := os.WriteFile(filepath.Join(source, "README.md"), []byte("production auth\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

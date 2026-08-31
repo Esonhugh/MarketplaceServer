@@ -849,6 +849,29 @@ func TestSmartHTTPUnknownLengthLimitDoesNotLeakReaderError(t *testing.T) {
 	}
 }
 
+func TestInstallProtectedReceiveHooksRoutesHeadsAndTagsThroughProcReceive(t *testing.T) {
+	fake := newFakeGit(t)
+	svc, err := NewService(Config{StorageRoot: t.TempDir(), gitBinary: fake.path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.InitBareRepository(context.Background(), testRepositoryID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.InstallProtectedReceiveHooks(context.Background(), testRepositoryID); err != nil {
+		t.Fatal(err)
+	}
+	log := fake.readLog(t)
+	for _, invocation := range []string{
+		"ARG:config\nARG:--replace-all\nARG:receive.procReceiveRefs\nARG:refs/heads/",
+		"ARG:config\nARG:--add\nARG:receive.procReceiveRefs\nARG:refs/tags/",
+	} {
+		if !strings.Contains(log, invocation) {
+			t.Fatalf("Git invocation log does not contain %q:\n%s", invocation, log)
+		}
+	}
+}
+
 func TestModConfigExposesRuntimeDependencies(t *testing.T) {
 	mod := &Mod{}
 	cfg := mod.Config().(*Config)
@@ -996,6 +1019,8 @@ func TestRealGitSmartHTTPAuthorizedPushInteroperability(t *testing.T) {
 	runGitCommand(t, gitBinary, worktree, "init")
 	runGitCommand(t, gitBinary, worktree, "config", "user.name", "Marketplace Test")
 	runGitCommand(t, gitBinary, worktree, "config", "user.email", "marketplace@example.invalid")
+	runGitCommand(t, gitBinary, worktree, "config", "commit.gpgSign", "false")
+	runGitCommand(t, gitBinary, worktree, "config", "tag.gpgSign", "false")
 	if err := os.WriteFile(filepath.Join(worktree, "README"), []byte("private push\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1030,6 +1055,8 @@ func TestRealGitSmartHTTPAnonymousCloneInteroperability(t *testing.T) {
 	runGitCommand(t, gitBinary, worktree, "init")
 	runGitCommand(t, gitBinary, worktree, "config", "user.name", "Marketplace Test")
 	runGitCommand(t, gitBinary, worktree, "config", "user.email", "marketplace@example.invalid")
+	runGitCommand(t, gitBinary, worktree, "config", "commit.gpgSign", "false")
+	runGitCommand(t, gitBinary, worktree, "config", "tag.gpgSign", "false")
 	if err := os.WriteFile(filepath.Join(worktree, "README"), []byte("interop\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/Esonhugh/MarketplaceServer/pkg/gitservice"
 	"github.com/google/uuid"
@@ -202,6 +203,9 @@ type receiveHookSession struct {
 	repositoryPath string
 	sessionID      string
 	cancel         context.CancelFunc
+
+	connectionMu sync.Mutex
+	connection   net.Conn
 }
 
 func startReceiveHookSession(ctx context.Context, service *Service, inspector *pluginSourceInspector, receive receiveContext) (*receiveHookSession, error) {
@@ -233,41 +237,96 @@ func startReceiveHookSession(ctx context.Context, service *Service, inspector *p
 
 func (s *receiveHookSession) SocketPath() string { return s.listener.Addr().String() }
 
-func (s *receiveHookSession) Wait(_ error) error {
-	s.cancel()
-	_ = s.listener.Close()
+func closeHookConnection(connection net.Conn) {
+	if unix, ok := connection.(*net.UnixConn); ok {
+		_ = unix.CloseRead()
+		_ = unix.CloseWrite()
+	}
+	_ = connection.Close()
+}
+
+func (s *receiveHookSession) Wait(runErr error) error {
+	s.stop()
 	err := <-s.done
 	_ = os.RemoveAll(filepath.Dir(s.listener.Addr().String()))
+	if runErr == nil && errors.Is(err, context.Canceled) {
+		return nil
+	}
 	return err
 }
 
 func (s *receiveHookSession) Abort() {
-	s.cancel()
-	_ = s.listener.Close()
+	s.stop()
 	<-s.done
 	_ = os.RemoveAll(filepath.Dir(s.listener.Addr().String()))
+}
+
+func (s *receiveHookSession) stop() {
+	s.cancel()
+	_ = s.listener.Close()
+	s.connectionMu.Lock()
+	connection := s.connection
+	s.connectionMu.Unlock()
+	if connection != nil {
+		closeHookConnection(connection)
+	}
+}
+
+func (s *receiveHookSession) setConnection(connection net.Conn) {
+	s.connectionMu.Lock()
+	s.connection = connection
+	s.connectionMu.Unlock()
+}
+
+func (s *receiveHookSession) clearConnection(connection net.Conn) {
+	s.connectionMu.Lock()
+	if s.connection == connection {
+		s.connection = nil
+	}
+	s.connectionMu.Unlock()
 }
 
 func (s *receiveHookSession) serve(ctx context.Context) {
 	for {
 		connection, err := s.listener.Accept()
 		if err != nil {
-			s.done <- errors.New("protected receive hook unavailable")
+			if ctx.Err() != nil {
+				s.done <- context.Canceled
+			} else {
+				s.done <- errors.New("protected receive hook unavailable")
+			}
+			return
+		}
+		s.setConnection(connection)
+		if ctx.Err() != nil {
+			s.clearConnection(connection)
+			closeHookConnection(connection)
+			s.done <- context.Canceled
 			return
 		}
 		reader := bufio.NewReader(connection)
 		mode, err := reader.ReadString('\n')
 		if err != nil {
-			_ = connection.Close()
-			s.done <- errors.New("protected receive hook request failed")
+			s.clearConnection(connection)
+			closeHookConnection(connection)
+			if ctx.Err() != nil {
+				s.done <- context.Canceled
+			} else {
+				s.done <- errors.New("protected receive hook request failed")
+			}
 			return
 		}
 		switch strings.TrimSpace(mode) {
 		case "pre-receive":
 			_, err = io.Copy(io.Discard, reader)
-			_ = connection.Close()
+			s.clearConnection(connection)
+			closeHookConnection(connection)
 			if err != nil {
-				s.done <- errors.New("protected receive hook request failed")
+				if ctx.Err() != nil {
+					s.done <- context.Canceled
+				} else {
+					s.done <- errors.New("protected receive hook request failed")
+				}
 				return
 			}
 		case "proc-receive":
@@ -278,11 +337,13 @@ func (s *receiveHookSession) serve(ctx context.Context) {
 				plugin: plugin, sessionID: s.sessionID,
 			}
 			err = RunCoordinatedProcReceiveSession(ctx, s.service.gitBinary, s.repositoryPath, reader, connection, lifecycle)
-			_ = connection.Close()
+			s.clearConnection(connection)
+			closeHookConnection(connection)
 			s.done <- err
 			return
 		default:
-			_ = connection.Close()
+			s.clearConnection(connection)
+			closeHookConnection(connection)
 			s.done <- errors.New("unsupported protected receive hook")
 			return
 		}
@@ -298,17 +359,44 @@ func runReceiveHookClient(ctx context.Context, mode, socketPath string, input io
 		return errors.New("protected receive coordinator unavailable")
 	}
 	defer connection.Close()
+	stopCancellation := context.AfterFunc(ctx, func() {
+		closeHookConnection(connection)
+	})
+	defer stopCancellation()
 	if _, err := io.WriteString(connection, mode+"\n"); err != nil {
 		return errors.New("protected receive request failed")
+	}
+	if mode == "proc-receive" {
+		requestDone := make(chan error, 1)
+		go func() {
+			_, copyErr := io.Copy(connection, input)
+			if unix, ok := connection.(*net.UnixConn); ok {
+				_ = unix.CloseWrite()
+			}
+			requestDone <- copyErr
+		}()
+		if _, err := io.Copy(output, connection); err != nil {
+			if ctx.Err() != nil {
+				return errors.New("protected receive cancelled")
+			}
+			return errors.New("protected receive response failed")
+		}
+		if err := <-requestDone; err != nil {
+			if ctx.Err() != nil {
+				return errors.New("protected receive cancelled")
+			}
+			return errors.New("protected receive request failed")
+		}
+		if ctx.Err() != nil {
+			return errors.New("protected receive cancelled")
+		}
+		return nil
 	}
 	if _, err := io.Copy(connection, input); err != nil {
 		return errors.New("protected receive request failed")
 	}
 	if unix, ok := connection.(*net.UnixConn); ok {
 		_ = unix.CloseWrite()
-	}
-	if _, err := io.Copy(output, connection); err != nil {
-		return errors.New("protected receive response failed")
 	}
 	return nil
 }

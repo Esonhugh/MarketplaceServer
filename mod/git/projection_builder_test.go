@@ -164,6 +164,8 @@ func newProjectionFixture(t *testing.T, annotated bool) (*Service, string, strin
 	runGit(t, "clone", sourcePath, work)
 	runGitIn(t, work, "config", "user.name", "Test")
 	runGitIn(t, work, "config", "user.email", "test@example.com")
+	runGitIn(t, work, "config", "commit.gpgSign", "false")
+	runGitIn(t, work, "config", "tag.gpgSign", "false")
 	if err := os.WriteFile(filepath.Join(work, "plugin.txt"), []byte("version one\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

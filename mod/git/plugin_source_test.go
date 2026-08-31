@@ -274,6 +274,8 @@ func newPluginSourceFixture(t *testing.T, options pluginSourceFixtureOptions) pl
 	pluginSourceGit(t, gitBinary, "", "clone", repositoryPath, worktree)
 	pluginSourceGit(t, gitBinary, worktree, "config", "user.name", "Plugin Source Test")
 	pluginSourceGit(t, gitBinary, worktree, "config", "user.email", "plugin-source@example.invalid")
+	pluginSourceGit(t, gitBinary, worktree, "config", "commit.gpgSign", "false")
+	pluginSourceGit(t, gitBinary, worktree, "config", "tag.gpgSign", "false")
 	if err := os.WriteFile(filepath.Join(worktree, "README.md"), []byte("fixture\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

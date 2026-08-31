@@ -347,14 +347,14 @@ func (s *Service) ReceivePack(ctx context.Context, repositoryID string, stdin io
 	if !ok || inspector == nil {
 		return errors.New("protected receive inspector unavailable")
 	}
-	session, err := startReceiveHookSession(ctx, s, inspector, receive)
-	if err != nil {
-		return err
-	}
 	if s.serviceTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, s.serviceTimeout)
 		defer cancel()
+	}
+	session, err := startReceiveHookSession(ctx, s, inspector, receive)
+	if err != nil {
+		return err
 	}
 	command := exec.CommandContext(ctx, s.gitBinary, "receive-pack", "--stateless-rpc", path)
 	command.Env = append(gitEnv(), protectedReceiveHookSocketEnv+"="+session.SocketPath())
@@ -407,7 +407,10 @@ func (s *Service) installProtectedReceiveHooks(ctx context.Context, repositoryPa
 			return err
 		}
 	}
-	if err := s.runGit(ctx, nil, io.Discard, io.Discard, "--git-dir="+repositoryPath, "config", "--replace-all", "receive.procReceiveRefs", "refs/tags/"); err != nil {
+	if err := s.runGit(ctx, nil, io.Discard, io.Discard, "--git-dir="+repositoryPath, "config", "--replace-all", "receive.procReceiveRefs", "refs/heads/"); err != nil {
+		return errors.New("configure protected receive refs")
+	}
+	if err := s.runGit(ctx, nil, io.Discard, io.Discard, "--git-dir="+repositoryPath, "config", "--add", "receive.procReceiveRefs", "refs/tags/"); err != nil {
 		return errors.New("configure protected receive refs")
 	}
 	return s.verifyProtectedReceiveHooks(repositoryPath)
