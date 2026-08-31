@@ -78,8 +78,8 @@
 | `POST` | `/api/v1/namespaces/:namespace/plugins` | Bearer JWT + `plugin.create` |
 | `GET` | `/api/v1/namespaces/:namespace/plugins/:plugin` | Bearer JWT + `plugin.read` |
 | `POST` | `/api/v1/namespaces/:namespace/plugins/:plugin:archive` | Bearer JWT + `plugin.archive` |
-| `POST` | `/api/v1/namespaces/:namespace/plugins/:plugin:restore` | Bearer JWT + `plugin.write` |
-| `POST` | `/api/v1/namespaces/:namespace/plugins/:plugin:set-visibility` | Bearer JWT + `plugin.write` |
+| `POST` | `/api/v1/namespaces/:namespace/plugins/:plugin:restore` | Bearer JWT + `plugin.archive` |
+| `POST` | `/api/v1/namespaces/:namespace/plugins/:plugin:set-visibility` | Bearer JWT + `plugin.archive` |
 | `GET` | `/api/v1/namespaces/:namespace/plugins/:plugin/versions` | Bearer JWT + `plugin.read` |
 | `GET` | `/api/v1/namespaces/:namespace/plugins/:plugin/versions/:tag` | Bearer JWT + `plugin.read`；deleted tombstone 返回 `410` |
 | `POST` | `/api/v1/namespaces/:namespace/plugins/:plugin/versions:publish` | Bearer JWT + `plugin.publish` |
@@ -109,7 +109,7 @@
 
 ## 当前持久化基础
 
-`mod/backend/migrate.go` 只装配 identity 与 distribution migrations。
+`mod/backend/migrate.go` 按顺序装配 identity、Plugin lifecycle 与 distribution migrations。
 
 Identity 当前迁移：
 

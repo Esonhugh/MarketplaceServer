@@ -7,7 +7,7 @@
 
 ## 请求平面与 authority
 
-本文件记录 management-plane rationale、authorization 与 lifecycle 边界。精确 proposed HTTP wire 以 [management-v1-design.yaml](../../../../../api/openapi/management-v1-design.yaml) 为权威；当前 deployed [management-v1.yaml](../../../../../api/openapi/management-v1.yaml) 尚无这些 Plugin routes。
+本文件记录 management-plane rationale、authorization 与 lifecycle 边界。已部署 HTTP wire 以 [management-v1.yaml](../../../../../api/openapi/management-v1.yaml) 为权威；早期 proposal 保留在 [management-v1-design.yaml](../../../../../api/openapi/management-v1-design.yaml) 作为设计历史。
 
 所有 management mutation 使用 Bearer JWT。PAT、account password、Git Basic credential 和 distribution credential 均不能认证 `/api/v1`。DTO 与 GORM record 隔离；API 不暴露 Plugin/Repository UUID、storage key、path 或 internal recovery detail。
 

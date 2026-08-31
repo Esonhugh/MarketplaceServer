@@ -46,7 +46,7 @@ SQL failure synchronously removes only the newly generated UUID repository. Fail
 
 ## 4. Management contract
 
-Exact proposed wire is [management-v1-design.yaml](../../../../api/openapi/management-v1-design.yaml); rationale is [management/api-contract.md](management/api-contract.md). Deployed OpenAPI remains unchanged until runtime conformance.
+The implemented wire is [management-v1.yaml](../../../../api/openapi/management-v1.yaml); rationale is [management/api-contract.md](management/api-contract.md). The earlier proposal remains in [management-v1-design.yaml](../../../../api/openapi/management-v1-design.yaml) as design history; runtime conformance promoted the Plugin routes to the deployed contract.
 
 Commands:
 
@@ -136,7 +136,7 @@ Backend owns SQL policy/state/orchestration. Git owns filesystem, refs, quaranti
 | Git authorization/admission | real clone/fetch/push; PAT preset denies; archive/readOnly/error denies before subprocess; tag strict validation; whole-push rejection |
 | Version/publication | first publish activation, CAS SHA, default changes, delete/restore same logical tag, active-reference delete deny |
 | intent/projection recovery | crash points, staged digest, accepted/unaccepted/ambiguous ref reconciliation, fail-closed reads, GC idempotency, race tests |
-| integration/docs | DI boundary, deployed OpenAPI promotion only after conformance, current-state and operations evidence |
+| integration/docs | DI boundary, deployed OpenAPI conformance, current-state and operations evidence |
 
 Agents may read shared files but implementation owners must have exclusive write scope. Shared DI/OpenAPI/current-state changes are serialized by the integration owner. The 2026-08-30 approval covers every slice in this design. Each slice still requires TDD, focused and full applicable checks, and a cohesive new commit only when explicitly requested.
 

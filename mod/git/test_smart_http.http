@@ -1,6 +1,7 @@
 @baseUrl = http://localhost:8080
 @username = admin
 @pat = mpsk_replace-with-git-personal-access-token
+@basicAuth = replace-with-base64-username-colon-pat
 @namespace = default
 @repository = replace-with-plugin-repository
 @marketplaceKey = replace-with-marketplace-public-key
@@ -9,12 +10,12 @@
 ### Advertise development repository read refs
 GET {{baseUrl}}/git/{{namespace}}/{{repository}}.git/info/refs?service=git-upload-pack
 Accept: application/x-git-upload-pack-advertisement
-Authorization: Basic {{username}} {{pat}}
+Authorization: Basic {{basicAuth}}
 
 ### Advertise development repository write refs
 GET {{baseUrl}}/git/{{namespace}}/{{repository}}.git/info/refs?service=git-receive-pack
 Accept: application/x-git-receive-pack-advertisement
-Authorization: Basic {{username}} {{pat}}
+Authorization: Basic {{basicAuth}}
 
 ### Advertise public Marketplace projection
 GET {{baseUrl}}/distribution/marketplaces/{{marketplaceKey}}.git/info/refs?service=git-upload-pack

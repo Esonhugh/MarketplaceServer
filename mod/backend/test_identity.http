@@ -4,6 +4,7 @@
 @jwt = replace-with-login-jwt
 @tokenId = 00000000-0000-0000-0000-000000000000
 @pat = mpsk_replace-with-personal-access-token
+@basicAuth = replace-with-base64-username-colon-pat
 @marketplaceKey = replace-with-marketplace-public-key
 @namespace = admin
 @plugin = example-plugin
@@ -148,7 +149,7 @@ Authorization: Bearer {{jwt}}
 ### Read authenticated user Marketplace
 GET {{baseUrl}}/distribution/users/{{username}}/marketplace.json
 Accept: application/json
-Authorization: Basic {{username}} {{pat}}
+Authorization: Basic {{basicAuth}}
 
 ### Read public Marketplace JSON
 GET {{baseUrl}}/distribution/marketplaces/{{marketplaceKey}}/marketplace.json
