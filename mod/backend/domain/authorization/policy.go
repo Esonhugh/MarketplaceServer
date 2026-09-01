@@ -25,6 +25,8 @@ type IdentityState struct {
 	SystemAdmin           bool
 	OwnsPersonalNamespace bool
 	OwnsResource          bool
+	TeamRole              string
+	InvitationTarget      bool
 	Plugin                auth.PluginAuthorizationFacts
 }
 
@@ -72,8 +74,17 @@ func (p *Policy) Authorize(ctx context.Context, principal auth.Principal, action
 		return ErrDenied
 	}
 
+	if action == auth.ActionTeamCreate || action == auth.ActionTeamList {
+		return nil
+	}
+	if isTeamAction(action) {
+		if state.SystemAdmin || action == auth.ActionTeamInvitationRespond && state.InvitationTarget || allowsTeamAction(action, state.TeamRole) {
+			return nil
+		}
+		return ErrDenied
+	}
 	if isPluginNamespaceAction(action) {
-		if state.SystemAdmin || state.OwnsPersonalNamespace {
+		if state.SystemAdmin || state.OwnsPersonalNamespace || allowsTeamPluginAction(action, state.TeamRole) {
 			return nil
 		}
 		return ErrDenied
@@ -85,7 +96,7 @@ func (p *Policy) Authorize(ctx context.Context, principal auth.Principal, action
 		if action == auth.ActionPluginRead && allowsPublicPluginRead(state.Plugin) {
 			return nil
 		}
-		if state.SystemAdmin || state.OwnsPersonalNamespace {
+		if state.SystemAdmin || state.OwnsPersonalNamespace || allowsTeamPluginAction(action, state.TeamRole) {
 			return nil
 		}
 		return ErrDenied
@@ -113,7 +124,24 @@ func isKnownAction(action auth.Action) bool {
 		auth.ActionPluginArchive,
 		auth.ActionPluginPublish,
 		auth.ActionTokenRead,
-		auth.ActionTokenWrite:
+		auth.ActionTokenWrite,
+		auth.ActionUserList,
+		auth.ActionUserRead,
+		auth.ActionUserCreate,
+		auth.ActionUserUpdate,
+		auth.ActionUserDisable,
+		auth.ActionUserEnable,
+		auth.ActionUserAdminGrant,
+		auth.ActionUserAdminRevoke,
+		auth.ActionTeamCreate,
+		auth.ActionTeamList,
+		auth.ActionTeamRead,
+		auth.ActionTeamSettingsWrite,
+		auth.ActionTeamMembersRead,
+		auth.ActionTeamMembersManage,
+		auth.ActionTeamInvitationsRead,
+		auth.ActionTeamInvitationsManage,
+		auth.ActionTeamInvitationRespond:
 		return true
 	default:
 		return false
@@ -130,9 +158,60 @@ func supportsResource(action auth.Action, resource auth.ResourceRef) bool {
 		return resource.Type == auth.ResourceMarketplace || resource.Type == auth.ResourceUser
 	case auth.ActionTokenRead, auth.ActionTokenWrite:
 		return resource.Type == auth.ResourceToken || resource.Type == auth.ResourceTokenCollection
+	case auth.ActionUserList, auth.ActionUserCreate:
+		return resource.Type == auth.ResourceUserCollection && resource.ID != ""
+	case auth.ActionUserRead, auth.ActionUserUpdate, auth.ActionUserDisable, auth.ActionUserEnable, auth.ActionUserAdminGrant, auth.ActionUserAdminRevoke:
+		return resource.Type == auth.ResourceUser && resource.ID != ""
+	case auth.ActionTeamCreate, auth.ActionTeamList, auth.ActionTeamRead, auth.ActionTeamSettingsWrite, auth.ActionTeamMembersRead, auth.ActionTeamInvitationsRead, auth.ActionTeamInvitationsManage:
+		return resource.Type == auth.ResourceNamespace && resource.ID != "" && resource.NamespaceID == ""
+	case auth.ActionTeamMembersManage:
+		return resource.Type == auth.ResourceTeamMembership && resource.ID != "" && resource.NamespaceID != ""
+	case auth.ActionTeamInvitationRespond:
+		return resource.Type == auth.ResourceTeamInvitation && resource.ID != "" && resource.NamespaceID != ""
 	default:
 		return false
 	}
+}
+
+func isTeamAction(action auth.Action) bool {
+	switch action {
+	case auth.ActionTeamRead, auth.ActionTeamSettingsWrite, auth.ActionTeamMembersRead,
+		auth.ActionTeamMembersManage, auth.ActionTeamInvitationsRead,
+		auth.ActionTeamInvitationsManage, auth.ActionTeamInvitationRespond:
+		return true
+	default:
+		return false
+	}
+}
+
+func allowsTeamAction(action auth.Action, role string) bool {
+	switch action {
+	case auth.ActionTeamRead, auth.ActionTeamMembersRead, auth.ActionTeamInvitationsRead:
+		return validTeamRole(role)
+	case auth.ActionTeamSettingsWrite, auth.ActionTeamMembersManage, auth.ActionTeamInvitationsManage:
+		return role == "owner" || role == "admin"
+	case auth.ActionTeamInvitationRespond:
+		return false
+	default:
+		return false
+	}
+}
+
+func allowsTeamPluginAction(action auth.Action, role string) bool {
+	switch action {
+	case auth.ActionPluginList, auth.ActionPluginRead:
+		return validTeamRole(role)
+	case auth.ActionPluginCreate, auth.ActionPluginWrite:
+		return role == "owner" || role == "admin" || role == "maintainer" || role == "developer"
+	case auth.ActionPluginArchive, auth.ActionPluginPublish:
+		return role == "owner" || role == "admin" || role == "maintainer"
+	default:
+		return false
+	}
+}
+
+func validTeamRole(role string) bool {
+	return role == "owner" || role == "admin" || role == "maintainer" || role == "developer" || role == "viewer"
 }
 
 func isPluginNamespaceAction(action auth.Action) bool {

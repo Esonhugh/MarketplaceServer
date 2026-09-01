@@ -45,6 +45,8 @@ var migrationModels = []any{
 	&Namespace{},
 	&SystemGroup{},
 	&UserGroupMembership{},
+	&TeamMembership{},
+	&TeamInvitation{},
 	&PersonalAccessToken{},
 }
 

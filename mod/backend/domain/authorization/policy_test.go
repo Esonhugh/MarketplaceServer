@@ -400,6 +400,62 @@ func TestPolicyDefaultDenyAndReaderFailures(t *testing.T) {
 	}
 }
 
+func TestPolicyTeamRoleMatrix(t *testing.T) {
+	t.Parallel()
+	principal := passwordPrincipal(t, "member-1")
+	plugin := pluginResource()
+	roles := []string{"owner", "admin", "maintainer", "developer", "viewer", ""}
+	for _, role := range roles {
+		state := IdentityState{Active: true, TeamRole: role, Plugin: privateActivePluginFacts(auth.RepositoryOperationalReady)}
+		for _, action := range []auth.Action{auth.ActionPluginRead, auth.ActionPluginWrite, auth.ActionPluginArchive, auth.ActionPluginPublish} {
+			reader := &stubIdentityStateReader{states: map[string]IdentityState{stateKey(principal, plugin): state}}
+			allowed := NewPolicy(reader).Authorize(context.Background(), principal, action, plugin) == nil
+			want := role != ""
+			if action == auth.ActionPluginWrite {
+				want = role == "owner" || role == "admin" || role == "maintainer" || role == "developer"
+			} else if action == auth.ActionPluginArchive || action == auth.ActionPluginPublish {
+				want = role == "owner" || role == "admin" || role == "maintainer"
+			}
+			if allowed != want {
+				t.Fatalf("role %q action %q allowed=%v, want %v", role, action, allowed, want)
+			}
+		}
+	}
+}
+
+func TestPolicyTeamControlPlaneAndInvitationTarget(t *testing.T) {
+	t.Parallel()
+	principal := passwordPrincipal(t, "member-1")
+	team := auth.ResourceRef{Type: auth.ResourceNamespace, ID: "team-1"}
+	for _, tc := range []struct {
+		role string
+		action auth.Action
+		want bool
+	}{
+		{"viewer", auth.ActionTeamRead, true},
+		{"developer", auth.ActionTeamMembersRead, true},
+		{"admin", auth.ActionTeamSettingsWrite, true},
+		{"admin", auth.ActionTeamMembersManage, true},
+		{"maintainer", auth.ActionTeamMembersManage, false},
+		{"viewer", auth.ActionTeamSettingsWrite, false},
+	} {
+		resource := team
+		if tc.action == auth.ActionTeamMembersManage {
+			resource = auth.ResourceRef{Type: auth.ResourceTeamMembership, ID: "target-1", NamespaceID: "team-1"}
+		}
+		reader := &stubIdentityStateReader{states: map[string]IdentityState{stateKey(principal, resource): {Active: true, TeamRole: tc.role}}}
+		allowed := NewPolicy(reader).Authorize(context.Background(), principal, tc.action, resource) == nil
+		if allowed != tc.want {
+			t.Fatalf("role %q action %q allowed=%v, want %v", tc.role, tc.action, allowed, tc.want)
+		}
+	}
+	invitation := auth.ResourceRef{Type: auth.ResourceTeamInvitation, ID: "invite-1", NamespaceID: "team-1"}
+	reader := &stubIdentityStateReader{states: map[string]IdentityState{stateKey(principal, invitation): {Active: true, InvitationTarget: true}}}
+	if err := NewPolicy(reader).Authorize(context.Background(), principal, auth.ActionTeamInvitationRespond, invitation); err != nil {
+		t.Fatalf("target invitation response denied: %v", err)
+	}
+}
+
 func TestPolicyImplementsAuthorizer(t *testing.T) {
 	t.Parallel()
 

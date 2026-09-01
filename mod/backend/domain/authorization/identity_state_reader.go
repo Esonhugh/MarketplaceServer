@@ -62,22 +62,50 @@ func (reader *GORMIdentityStateReader) ReadAuthorizationState(ctx context.Contex
 		state.OwnsPersonalNamespace = namespace.Kind == identitymodel.NamespaceKindUser && namespace.OwnerUserID != nil && *namespace.OwnerUserID == user.ID
 	}
 	state.OwnsResource = resourceState.ownerUserID == user.ID
+	if resourceState.teamNamespaceID != "" {
+		var membership struct{ Role string }
+		err = reader.db.WithContext(ctx).Table("team_memberships").Select("role").
+			Where("namespace_id = ? AND user_id = ?", resourceState.teamNamespaceID, user.ID).Take(&membership).Error
+		if err == nil {
+			state.TeamRole = membership.Role
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return IdentityState{}, fmt.Errorf("resolve Team membership: %w", err)
+		}
+	}
+	state.InvitationTarget = resourceState.invitedUserID == user.ID
 	return state, nil
 }
 
 type resourceAuthorizationState struct {
 	ownerNamespaceID string
 	ownerUserID      string
+	teamNamespaceID  string
+	invitedUserID    string
 	plugin           auth.PluginAuthorizationFacts
 }
 
 func (reader *GORMIdentityStateReader) resourceState(ctx context.Context, resource auth.ResourceRef) (resourceAuthorizationState, error) {
 	switch resource.Type {
 	case auth.ResourceUser:
-		namespaceID, err := reader.personalNamespaceID(ctx, resource.ID)
-		return resourceAuthorizationState{ownerNamespaceID: namespaceID, ownerUserID: resource.ID}, err
+		// User administration is authorized solely by the actor's current global
+		// administrator membership. Do not resolve the target here: service commands
+		// map an absent target to the documented not-found result.
+		return resourceAuthorizationState{ownerUserID: resource.ID}, nil
+	case auth.ResourceUserCollection:
+		return resourceAuthorizationState{}, nil
 	case auth.ResourceNamespace:
-		return resourceAuthorizationState{ownerNamespaceID: resource.ID}, nil
+		return resourceAuthorizationState{ownerNamespaceID: resource.ID, teamNamespaceID: resource.ID}, nil
+	case auth.ResourceTeamMembership:
+		return resourceAuthorizationState{ownerNamespaceID: resource.NamespaceID, teamNamespaceID: resource.NamespaceID}, nil
+	case auth.ResourceTeamInvitation:
+		var invitation struct {
+			NamespaceID string
+			UserID      string
+		}
+		if err := reader.db.WithContext(ctx).Table("team_invitations").Select("namespace_id, user_id").Where("id = ? AND namespace_id = ?", resource.ID, resource.NamespaceID).Take(&invitation).Error; err != nil {
+			return resourceAuthorizationState{}, mapResourceError(err)
+		}
+		return resourceAuthorizationState{ownerNamespaceID: invitation.NamespaceID, teamNamespaceID: invitation.NamespaceID, invitedUserID: invitation.UserID}, nil
 	case auth.ResourcePlugin:
 		return reader.pluginState(ctx, resource)
 	case auth.ResourceMarketplace:
@@ -128,6 +156,7 @@ func (reader *GORMIdentityStateReader) pluginState(ctx context.Context, resource
 	}
 	return resourceAuthorizationState{
 		ownerNamespaceID: record.NamespaceID,
+		teamNamespaceID:  record.NamespaceID,
 		plugin: auth.PluginAuthorizationFacts{
 			Visibility:       auth.PluginVisibility(record.Visibility),
 			Status:           auth.PluginStatus(record.Status),

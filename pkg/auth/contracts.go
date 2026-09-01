@@ -29,6 +29,23 @@ const (
 	ActionPluginPublish   Action = "plugin.publish"
 	ActionTokenRead       Action = "token.read"
 	ActionTokenWrite      Action = "token.write"
+	ActionUserList        Action = "user.list"
+	ActionUserRead        Action = "user.read"
+	ActionUserCreate      Action = "user.create"
+	ActionUserUpdate      Action = "user.update"
+	ActionUserDisable     Action = "user.disable"
+	ActionUserEnable      Action = "user.enable"
+	ActionUserAdminGrant      Action = "user.admin.grant"
+	ActionUserAdminRevoke     Action = "user.admin.revoke"
+	ActionTeamCreate          Action = "team.create"
+	ActionTeamList            Action = "team.list"
+	ActionTeamRead            Action = "team.read"
+	ActionTeamSettingsWrite   Action = "team.settings.write"
+	ActionTeamMembersRead     Action = "team.members.read"
+	ActionTeamMembersManage   Action = "team.members.manage"
+	ActionTeamInvitationsRead Action = "team.invitations.read"
+	ActionTeamInvitationsManage Action = "team.invitations.manage"
+	ActionTeamInvitationRespond Action = "team.invitation.respond"
 )
 
 const (
@@ -38,6 +55,9 @@ const (
 	ResourceToken           = "token"
 	ResourceTokenCollection = "token_collection"
 	ResourceUser            = "user"
+	ResourceUserCollection  = "user_collection"
+	ResourceTeamMembership  = "team_membership"
+	ResourceTeamInvitation  = "team_invitation"
 )
 
 // PluginVisibility is the current authorization-relevant Plugin visibility.

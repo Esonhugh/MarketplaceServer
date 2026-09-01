@@ -15,7 +15,8 @@ import (
 func TestMigrationModelsFollowDependencyOrder(t *testing.T) {
 	want := []reflect.Type{
 		reflect.TypeOf(&User{}), reflect.TypeOf(&Namespace{}), reflect.TypeOf(&SystemGroup{}),
-		reflect.TypeOf(&UserGroupMembership{}), reflect.TypeOf(&PersonalAccessToken{}),
+		reflect.TypeOf(&UserGroupMembership{}), reflect.TypeOf(&TeamMembership{}),
+		reflect.TypeOf(&TeamInvitation{}), reflect.TypeOf(&PersonalAccessToken{}),
 	}
 	models := MigrationModels()
 	if len(models) != len(want) {

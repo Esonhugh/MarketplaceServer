@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/model"
@@ -13,6 +14,7 @@ import (
 
 var (
 	ErrIdentityNotFound  = errors.New("identity: record not found")
+	ErrIdentityConflict  = errors.New("identity: conflict")
 	ErrInvalidPagination = errors.New("identity dao: invalid pagination")
 )
 
@@ -83,6 +85,137 @@ func (repository *Repository) FindUserByID(ctx context.Context, id string) (mode
 		return model.User{}, fmt.Errorf("find user by ID: %w", err)
 	}
 	return user, nil
+}
+
+func (repository *Repository) CreateUserWithPersonalNamespace(ctx context.Context, user model.User, namespace model.Namespace) error {
+	return repository.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&user).Error; err != nil {
+			if isUniqueConstraintError(err) {
+				return ErrIdentityConflict
+			}
+			return fmt.Errorf("create user: %w", err)
+		}
+		if err := tx.Create(&namespace).Error; err != nil {
+			if isUniqueConstraintError(err) {
+				return ErrIdentityConflict
+			}
+			return fmt.Errorf("create personal namespace: %w", err)
+		}
+		return nil
+	})
+}
+
+func (repository *Repository) ListUsers(ctx context.Context, page, size int, status string) ([]model.User, int64, error) {
+	if page < 1 || size < 1 || page-1 > int(^uint(0)>>1)/size {
+		return nil, 0, ErrInvalidPagination
+	}
+	base := repository.db.WithContext(ctx).Model(&model.User{})
+	if status != "" {
+		base = base.Where("status = ?", status)
+	}
+	var total int64
+	if err := base.Session(&gorm.Session{}).Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("count users: %w", err)
+	}
+	var users []model.User
+	if err := base.Session(&gorm.Session{}).Order("created_at DESC").Order("id DESC").Limit(size).Offset((page - 1) * size).Find(&users).Error; err != nil {
+		return nil, 0, fmt.Errorf("list users: %w", err)
+	}
+	return users, total, nil
+}
+
+func (repository *Repository) UpdateUserDisplayName(ctx context.Context, id, displayName string, updatedAt time.Time) (model.User, error) {
+	result := repository.db.WithContext(ctx).Model(&model.User{}).Where("id = ?", id).Updates(map[string]any{"display_name": displayName, "updated_at": updatedAt.UTC()})
+	if result.Error != nil {
+		return model.User{}, fmt.Errorf("update user display name: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return model.User{}, ErrIdentityNotFound
+	}
+	return repository.FindUserByID(ctx, id)
+}
+
+func (repository *Repository) SetUserStatus(ctx context.Context, actorID, id, status string, updatedAt time.Time) error {
+	return repository.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockSystemAdministrators(tx, id); err != nil {
+			return fmt.Errorf("lock administrator state: %w", err)
+		}
+		var user model.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", id).Take(&user).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrIdentityNotFound
+		} else if err != nil {
+			return fmt.Errorf("find user for status update: %w", err)
+		}
+		if user.Status == status {
+			return nil
+		}
+		if status == model.UserStatusDisabled {
+			var activeAdmins int64
+			if err := tx.Table("user_group_memberships AS membership").Joins("JOIN users ON users.id = membership.user_id").Where("membership.group_id = ? AND users.status = ?", model.AdminSystemGroupID, model.UserStatusActive).Count(&activeAdmins).Error; err != nil {
+				return fmt.Errorf("count active administrators: %w", err)
+			}
+			var targetAdmin int64
+			if err := tx.Model(&model.UserGroupMembership{}).Where("user_id = ? AND group_id = ?", id, model.AdminSystemGroupID).Count(&targetAdmin).Error; err != nil {
+				return fmt.Errorf("read administrator membership: %w", err)
+			}
+			if targetAdmin > 0 && activeAdmins <= 1 {
+				return ErrIdentityConflict
+			}
+		}
+		if err := tx.Model(&model.User{}).Where("id = ? AND status = ?", id, user.Status).Updates(map[string]any{"status": status, "updated_at": updatedAt.UTC()}).Error; err != nil {
+			return fmt.Errorf("set user status: %w", err)
+		}
+		return nil
+	})
+}
+
+func (repository *Repository) SetSystemAdmin(ctx context.Context, actorID, id string, enabled bool) error {
+	return repository.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockSystemAdministrators(tx, id); err != nil {
+			return fmt.Errorf("lock administrator state: %w", err)
+		}
+		var user model.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", id).Take(&user).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrIdentityNotFound
+		} else if err != nil {
+			return fmt.Errorf("find user for admin update: %w", err)
+		}
+		if enabled {
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.UserGroupMembership{UserID: id, GroupID: model.AdminSystemGroupID}).Error; err != nil {
+				return fmt.Errorf("grant administrator membership: %w", err)
+			}
+			return nil
+		}
+		var activeAdmins int64
+		if err := tx.Table("user_group_memberships AS membership").Joins("JOIN users ON users.id = membership.user_id").Where("membership.group_id = ? AND users.status = ?", model.AdminSystemGroupID, model.UserStatusActive).Count(&activeAdmins).Error; err != nil {
+			return fmt.Errorf("count active administrators: %w", err)
+		}
+		if user.Status == model.UserStatusActive && activeAdmins <= 1 {
+			return ErrIdentityConflict
+		}
+		if err := tx.Where("user_id = ? AND group_id = ?", id, model.AdminSystemGroupID).Delete(&model.UserGroupMembership{}).Error; err != nil {
+			return fmt.Errorf("revoke administrator membership: %w", err)
+		}
+		return nil
+	})
+}
+
+func lockSystemAdministrators(tx *gorm.DB, targetUserID string) error {
+	if tx.Dialector.Name() == "postgres" {
+		return tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", "identity:system-administrators").Error
+	}
+	// SQLite serializes writers. Touching the target user acquires the write lock
+	// before the active-administrator count is read without mutating immutable
+	// system-group rows.
+	if tx.Dialector.Name() == "sqlite" {
+		return tx.Exec("UPDATE users SET updated_at = updated_at WHERE id = ?", targetUserID).Error
+	}
+	return nil
+}
+
+func isUniqueConstraintError(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "unique constraint") || strings.Contains(message, "duplicate key")
 }
 
 func (repository *Repository) FindTokenCredentialBySecretHMAC(ctx context.Context, secretHMAC string) (TokenCredentialRecord, error) {
