@@ -45,6 +45,7 @@ type Mod struct {
 	repositoryService       gitservice.RepositoryService
 	repositoryProvisioner   gitservice.RepositoryProvisioner
 	repositoryOrphanCleaner gitservice.RepositoryOrphanCleaner
+	repositoryBrowser       gitservice.RepositoryBrowser
 	distributionReader      gitservice.DistributionReader
 	projectionBuilder       gitservice.ProjectionBuilder
 	pluginSourceInspector   gitservice.PluginSourceInspector
@@ -82,6 +83,7 @@ func (m *Mod) Init(hub *kernel.Hub) error {
 	m.repositoryService = svc
 	m.repositoryProvisioner = svc
 	m.repositoryOrphanCleaner = svc
+	m.repositoryBrowser = svc
 	m.distributionReader = svc
 	m.projectionBuilder = svc
 	m.pluginSourceInspector = inspector
@@ -90,6 +92,7 @@ func (m *Mod) Init(hub *kernel.Hub) error {
 		&m.repositoryService,
 		&m.repositoryProvisioner,
 		&m.repositoryOrphanCleaner,
+		&m.repositoryBrowser,
 		&m.distributionReader,
 		&m.projectionBuilder,
 		&m.pluginSourceInspector,

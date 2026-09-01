@@ -11,7 +11,68 @@ var (
 	ErrRepositoryNotFound       = errors.New("repository not found")
 	ErrRepositoryUnavailable    = errors.New("repository unavailable")
 	ErrRepositoryNotProvisioned = errors.New("repository was not provisioned by this operation")
+	ErrRevisionNotFound         = errors.New("repository revision not found")
+	ErrPathNotFound             = errors.New("repository path not found")
+	ErrPathNotText              = errors.New("repository path is not a text file")
+	ErrBlobTooLarge             = errors.New("repository blob exceeds preview limit")
+	ErrInvalidBrowseInput       = errors.New("invalid repository browse input")
 )
+
+const RepositoryBlobPreviewLimit = int64(1 << 20)
+
+type RepositoryRef struct {
+	Name      string `json:"name"`
+	CommitSHA string `json:"commitSha"`
+}
+
+type RepositoryRefs struct {
+	DefaultRef string          `json:"defaultRef"`
+	Branches   []RepositoryRef `json:"branches"`
+	Tags       []RepositoryRef `json:"tags"`
+}
+
+type RepositoryTreeEntry struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+	Size *int64 `json:"size"`
+}
+
+type RepositoryTree struct {
+	Ref       string                `json:"ref"`
+	CommitSHA string                `json:"commitSha"`
+	Path      string                `json:"path"`
+	Entries   []RepositoryTreeEntry `json:"entries"`
+}
+
+type RepositoryBlob struct {
+	Ref       string `json:"ref"`
+	CommitSHA string `json:"commitSha"`
+	Path      string `json:"path"`
+	Size      int64  `json:"size"`
+	Content   string `json:"content"`
+}
+
+type RepositoryCommit struct {
+	SHA         string    `json:"sha"`
+	Subject     string    `json:"subject"`
+	AuthorName  string    `json:"authorName"`
+	AuthorEmail string    `json:"authorEmail"`
+	CommittedAt time.Time `json:"committedAt"`
+}
+
+type RepositoryCommitPage struct {
+	Items []RepositoryCommit `json:"items"`
+	Page  int                `json:"page"`
+	Size  int                `json:"size"`
+	Total int64              `json:"total"`
+}
+
+type RepositoryBrowser interface {
+	ListRefs(context.Context, string) (RepositoryRefs, error)
+	ReadTree(context.Context, string, string, string) (RepositoryTree, error)
+	ReadBlob(context.Context, string, string, string) (RepositoryBlob, error)
+	ListCommits(context.Context, string, string, string, int, int) (RepositoryCommitPage, error)
+}
 
 // RepositoryIdentity carries the opaque identifiers that bind one hidden Git
 // repository to its Plugin aggregate. Neither identifier is a filesystem path.
