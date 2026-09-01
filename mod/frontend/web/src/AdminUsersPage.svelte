@@ -1,0 +1,42 @@
+<script>
+  import { onDestroy, onMount } from 'svelte';
+  export let apiClient;
+  let state = 'loading', error, items = [], status = '', controller, pending = '', confirm = null;
+  let username = '', displayName = '', email = '', password = '', edit = null;
+  onMount(load);
+  onDestroy(() => controller?.abort());
+  async function load() {
+    controller?.abort(); controller = new AbortController(); state = 'loading'; error = null;
+    try { const result = await apiClient.listUsers(1, 100, status, { signal: controller.signal }); items = result.items; state = 'ready'; }
+    catch (cause) { if (cause.name !== 'AbortError') { error = cause; state = 'error'; } }
+  }
+  async function create(event) {
+    event.preventDefault(); pending = 'create'; error = null;
+    try { await apiClient.createUser({ username, displayName, email: email || null, password, status: 'active' }); username = ''; displayName = ''; email = ''; password = ''; await load(); }
+    catch (cause) { error = cause; } finally { pending = ''; }
+  }
+  async function update(event) {
+    event.preventDefault(); pending = edit.id; error = null;
+    try { await apiClient.updateUser(edit.id, { displayName: edit.displayName }); edit = null; await load(); }
+    catch (cause) { error = cause; } finally { pending = ''; }
+  }
+  async function apply() {
+    const action = confirm; confirm = null; pending = action.user.id; error = null;
+    try {
+      if (action.kind === 'disable') await apiClient.disableUser(action.user.id);
+      else if (action.kind === 'enable') await apiClient.enableUser(action.user.id);
+      else if (action.kind === 'grant') await apiClient.grantSystemAdmin(action.user.id);
+      else await apiClient.revokeSystemAdmin(action.user.id);
+      await load();
+    } catch (cause) { error = cause; } finally { pending = ''; }
+  }
+</script>
+<svelte:head><title>Users · MarketplaceServer</title></svelte:head>
+<div class="page">
+  <header class="page-header"><div><p class="eyebrow">System administration</p><h1>Users</h1></div><label for="user-status">Status <select class="field compact" id="user-status" bind:value={status} onchange={load}><option value="">All</option><option value="active">Active</option><option value="disabled">Disabled</option></select></label></header>
+  <form class="panel form-inline" onsubmit={create}><h2>Create user</h2><label for="admin-username">Username</label><input class="field" id="admin-username" required bind:value={username}/><label for="admin-display-name">Display name</label><input class="field" id="admin-display-name" required bind:value={displayName}/><label for="admin-email">Email</label><input class="field" id="admin-email" type="email" bind:value={email}/><label for="admin-password">Password</label><input class="field" id="admin-password" type="password" minlength="12" required bind:value={password}/><button class="primary" disabled={pending}>{pending === 'create' ? 'Creating…' : 'Create user'}</button></form>
+  {#if error && state !== 'error'}<p class="panel error" role="alert">{error.status === 409 ? 'The operation conflicts with account or final-administrator safeguards.' : error.message}</p>{/if}
+  {#if state === 'loading'}<p class="panel" role="status">Loading users…</p>{:else if state === 'error'}<div class="panel" role="alert"><p class="error">{error.message}</p><button class="secondary" onclick={load}>Retry</button></div>{:else if !items.length}<p class="panel muted">No users match this filter.</p>{:else}<ul class="card-list">{#each items as user (user.id)}<li class="panel row"><div><h2>{user.displayName}</h2><p class="muted">{user.username} · {user.status}{user.systemAdmin ? ' · system administrator' : ''}</p></div><div class="actions"><button class="secondary" disabled={pending} onclick={() => edit = { id: user.id, username: user.username, displayName: user.displayName }}>Edit profile</button><button class="secondary" disabled={pending} onclick={() => confirm = { kind: user.status === 'active' ? 'disable' : 'enable', user }}>{user.status === 'active' ? 'Disable' : 'Enable'}</button><button class="secondary" disabled={pending} onclick={() => confirm = { kind: user.systemAdmin ? 'revoke' : 'grant', user }}>{user.systemAdmin ? 'Revoke admin' : 'Grant admin'}</button></div></li>{/each}</ul>{/if}
+  {#if edit}<div class="dialog-backdrop"><dialog class="dialog" open aria-labelledby="edit-user-title"><form onsubmit={update}><h2 id="edit-user-title">Edit {edit.username}</h2><label for="edit-display-name">Display name</label><input class="field" id="edit-display-name" required bind:value={edit.displayName}/><div class="actions"><button class="primary" disabled={pending}>Save</button><button type="button" class="secondary" onclick={() => edit = null}>Cancel</button></div></form></dialog></div>{/if}
+  {#if confirm}<div class="dialog-backdrop"><dialog class="dialog" open aria-labelledby="user-confirm"><h2 id="user-confirm">Confirm {confirm.kind}</h2><p>Apply this change to {confirm.user.username}? Server safeguards still apply.</p><div class="actions"><button class="danger" onclick={apply}>Confirm</button><button class="secondary" onclick={() => confirm = null}>Cancel</button></div></dialog></div>{/if}
+</div>

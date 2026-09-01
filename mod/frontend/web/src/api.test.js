@@ -178,6 +178,70 @@ describe('identity API client', () => {
     ]);
   });
 
+  it('uses approved management endpoint contracts', async () => {
+    saveSession({ username: 'alice', token: 'jwt-token' });
+    const fetchImpl = vi.fn().mockImplementation(async (_url, options) =>
+      new Response(options.method === 'DELETE' ? null : JSON.stringify({ data: { items: [], page: 1, size: 20, total: 0 } }), {
+        status: options.method === 'DELETE' ? 204 : 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    const api = createApiClient({ fetchImpl, getSession: loadSession, clearSession });
+
+    await api.listTeams(1, 20, 'all');
+    await api.putMember('security', 'user/id', 'manager');
+    await api.acceptInvitation('invite/id');
+    await api.listUsers(1, 20, 'active');
+    await api.revokeSystemAdmin('user/id');
+
+    expect(fetchImpl.mock.calls.map(([url, options]) => [url, options.method, options.body && JSON.parse(options.body)])).toEqual([
+      ['/api/v1/teams?page=1&size=20&scope=all', 'GET', undefined],
+      ['/api/v1/teams/security/members/user%2Fid', 'PUT', { role: 'manager' }],
+      ['/api/v1/me/team-invitations/invite%2Fid:accept', 'POST', undefined],
+      ['/api/v1/admin/users?page=1&size=20&status=active', 'GET', undefined],
+      ['/api/v1/admin/users/user%2Fid/system-admin', 'DELETE', undefined],
+    ]);
+  });
+
+  it('uses encoded Plugin, version, and repository API contracts', async () => {
+    saveSession({ username: 'alice', token: 'jwt-token' });
+    const fetchImpl = vi.fn().mockImplementation(async (_url, options) =>
+      new Response(options.method === 'DELETE' ? null : JSON.stringify({ data: { items: [], page: 1, size: 20, total: 0 } }), {
+        status: options.method === 'DELETE' ? 204 : 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    const api = createApiClient({ fetchImpl, getSession: loadSession, clearSession });
+
+    await api.listPlugins('team/a', 2, 10);
+    await api.createPlugin('team/a', { name: 'my-plugin', visibility: 'private' });
+    await api.getPlugin('team/a', 'my-plugin');
+    await api.archivePlugin('team/a', 'my-plugin');
+    await api.setPluginVisibility('team/a', 'my-plugin', 'private');
+    await api.listPluginVersions('team/a', 'my-plugin', 3, 25);
+    await api.publishPluginVersion('team/a', 'my-plugin', { tag: 'v1.0.0', makeDefault: true });
+    await api.setDefaultPluginVersion('team/a', 'my-plugin', 'v1.0.0+build/a');
+    await api.clearDefaultPluginVersion('team/a', 'my-plugin');
+    await api.getRepositoryTree('team/a', 'my-plugin', 'main/a', 'src/index.js');
+    await api.getRepositoryBlob('team/a', 'my-plugin', 'main/a', 'src/index.js');
+    await api.listRepositoryCommits('team/a', 'my-plugin', 'main/a', 'src/index.js', 2, 50);
+
+    expect(fetchImpl.mock.calls.map(([url, options]) => [url, options.method, options.body && JSON.parse(options.body)])).toEqual([
+      ['/api/v1/namespaces/team%2Fa/plugins?page=2&size=10', 'GET', undefined],
+      ['/api/v1/namespaces/team%2Fa/plugins', 'POST', { name: 'my-plugin', visibility: 'private' }],
+      ['/api/v1/namespaces/team%2Fa/plugins/my-plugin', 'GET', undefined],
+      ['/api/v1/namespaces/team%2Fa/plugins/my-plugin:archive', 'POST', undefined],
+      ['/api/v1/namespaces/team%2Fa/plugins/my-plugin:set-visibility', 'POST', { visibility: 'private' }],
+      ['/api/v1/namespaces/team%2Fa/plugins/my-plugin/versions?page=3&size=25', 'GET', undefined],
+      ['/api/v1/namespaces/team%2Fa/plugins/my-plugin/versions:publish', 'POST', { tag: 'v1.0.0', makeDefault: true }],
+      ['/api/v1/namespaces/team%2Fa/plugins/my-plugin/versions/v1.0.0%2Bbuild%2Fa:set-default', 'POST', undefined],
+      ['/api/v1/namespaces/team%2Fa/plugins/my-plugin/default-version', 'DELETE', undefined],
+      ['/api/v1/namespaces/team%2Fa/plugins/my-plugin/repository/tree?ref=main%2Fa&path=src%2Findex.js', 'GET', undefined],
+      ['/api/v1/namespaces/team%2Fa/plugins/my-plugin/repository/blob?ref=main%2Fa&path=src%2Findex.js', 'GET', undefined],
+      ['/api/v1/namespaces/team%2Fa/plugins/my-plugin/repository/commits?page=2&size=50&ref=main%2Fa&path=src%2Findex.js', 'GET', undefined],
+    ]);
+  });
+
   it('exposes a stable typed error for callers', () => {
     expect(new ApiError({ status: 422, code: 'validation_failed', message: 'invalid' })).toBeInstanceOf(Error);
   });
