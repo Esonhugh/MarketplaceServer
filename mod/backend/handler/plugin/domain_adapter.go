@@ -6,6 +6,7 @@ import (
 
 	plugindomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/plugin"
 	"github.com/Esonhugh/MarketplaceServer/pkg/auth"
+	"github.com/Esonhugh/MarketplaceServer/pkg/gitservice"
 )
 
 // DomainLifecycleAdapter preserves the handler's API-only contract while the
@@ -27,6 +28,10 @@ type domainLifecycle interface {
 	Publish(context.Context, auth.Principal, string, string, plugindomain.PublishInput) (plugindomain.VersionView, error)
 	SetDefaultVersion(context.Context, auth.Principal, string, string, string) error
 	ClearDefaultVersion(context.Context, auth.Principal, string, string) error
+	ListRepositoryRefs(context.Context, auth.Principal, string, string) (gitservice.RepositoryRefs, error)
+	ReadRepositoryTree(context.Context, auth.Principal, string, string, string, string) (gitservice.RepositoryTree, error)
+	ReadRepositoryBlob(context.Context, auth.Principal, string, string, string, string) (gitservice.RepositoryBlob, error)
+	ListRepositoryCommits(context.Context, auth.Principal, string, string, string, string, int, int) (gitservice.RepositoryCommitPage, error)
 }
 
 func NewDomainLifecycleAdapter(service any) *DomainLifecycleAdapter {
@@ -87,6 +92,26 @@ func (adapter *DomainLifecycleAdapter) SetDefaultVersion(ctx context.Context, pr
 
 func (adapter *DomainLifecycleAdapter) ClearDefaultVersion(ctx context.Context, principal auth.Principal, namespace, plugin string) error {
 	return mapDomainError(adapter.service.ClearDefaultVersion(ctx, principal, namespace, plugin))
+}
+
+func (adapter *DomainLifecycleAdapter) ListRepositoryRefs(ctx context.Context, principal auth.Principal, namespace, plugin string) (gitservice.RepositoryRefs, error) {
+	result, err := adapter.service.ListRepositoryRefs(ctx, principal, namespace, plugin)
+	return result, mapDomainError(err)
+}
+
+func (adapter *DomainLifecycleAdapter) ReadRepositoryTree(ctx context.Context, principal auth.Principal, namespace, plugin, revision, path string) (gitservice.RepositoryTree, error) {
+	result, err := adapter.service.ReadRepositoryTree(ctx, principal, namespace, plugin, revision, path)
+	return result, mapDomainError(err)
+}
+
+func (adapter *DomainLifecycleAdapter) ReadRepositoryBlob(ctx context.Context, principal auth.Principal, namespace, plugin, revision, path string) (gitservice.RepositoryBlob, error) {
+	result, err := adapter.service.ReadRepositoryBlob(ctx, principal, namespace, plugin, revision, path)
+	return result, mapDomainError(err)
+}
+
+func (adapter *DomainLifecycleAdapter) ListRepositoryCommits(ctx context.Context, principal auth.Principal, namespace, plugin, revision, path string, page, size int) (gitservice.RepositoryCommitPage, error) {
+	result, err := adapter.service.ListRepositoryCommits(ctx, principal, namespace, plugin, revision, path, page, size)
+	return result, mapDomainError(err)
 }
 
 func pluginFromDomain(value plugindomain.PluginView) Plugin {

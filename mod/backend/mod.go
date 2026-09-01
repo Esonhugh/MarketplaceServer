@@ -33,7 +33,8 @@ var (
 )
 
 type Config struct {
-	JWTSecret string `yaml:"jwtSecret" mapstructure:"jwtSecret"`
+	JWTSecret           string `yaml:"jwtSecret" mapstructure:"jwtSecret"`
+	RegistrationEnabled bool   `yaml:"registrationEnabled" mapstructure:"registrationEnabled"`
 }
 
 type Mod struct {
@@ -43,12 +44,16 @@ type Mod struct {
 	jin                    *jin.Engine
 	db                     *gorm.DB
 	git                    gitservice.RepositoryService
+	repositoryBrowser      gitservice.RepositoryBrowser
 	projectionBuilder      gitservice.ProjectionBuilder
 	distributionRepository distributiondomain.RepositoryStore
 	publicationService     *distributiondomain.PublicationService
 	accessService          *distributiondomain.AccessService
 	userMarketplaceService *distributiondomain.UserMarketplaceService
 	tokenService           *identityservice.TokenService
+	userService            *identityservice.UserService
+	teamService            *identityservice.TeamService
+	jwtService             *identityservice.JWTService
 	loginService           *identityservice.LoginService
 	managementAuth         identityhandler.ManagementAuthenticator
 	subscriptionPAT        auth.SubscriptionPATAuthenticator
@@ -88,6 +93,8 @@ func (m *Mod) PostInit(hub *kernel.Hub) error {
 	if isNil(repoService) {
 		return fmt.Errorf("backend dependency gitservice.RepositoryService not available: nil")
 	}
+
+	repositoryBrowser, _ := repoService.(gitservice.RepositoryBrowser)
 
 	var projectionBuilder gitservice.ProjectionBuilder
 	if err := hub.Load(&projectionBuilder); err != nil {
@@ -157,6 +164,14 @@ func (m *Mod) PostInit(hub *kernel.Hub) error {
 	if err != nil {
 		return fmt.Errorf("assemble token service: %w", err)
 	}
+	userService, err := identityservice.NewUserService(identityServices.Repository, authorizer)
+	if err != nil {
+		return fmt.Errorf("assemble user service: %w", err)
+	}
+	teamService, err := identityservice.NewTeamService(identityServices.Repository)
+	if err != nil {
+		return fmt.Errorf("assemble team service: %w", err)
+	}
 	pluginLifecycle := m.pluginLifecycle
 	receiveCoordinator := m.receiveCoordinator
 	var effectLocker plugindomain.EffectLocker
@@ -167,7 +182,7 @@ func (m *Mod) PostInit(hub *kernel.Hub) error {
 		}
 	}
 	if isNil(pluginLifecycle) {
-		pluginService, serviceErr := plugindomain.NewService(db, authorizer, repositoryProvisioner, pluginSourceInspector, effectLocker)
+		pluginService, serviceErr := plugindomain.NewService(db, authorizer, repositoryProvisioner, pluginSourceInspector, effectLocker, repositoryBrowser)
 		if serviceErr != nil {
 			return fmt.Errorf("assemble plugin lifecycle service: %w", serviceErr)
 		}
@@ -195,12 +210,16 @@ func (m *Mod) PostInit(hub *kernel.Hub) error {
 	m.jin = engine
 	m.db = db
 	m.git = repoService
+	m.repositoryBrowser = repositoryBrowser
 	m.projectionBuilder = projectionBuilder
 	m.distributionRepository = distributionRepository
 	m.publicationService = publicationService
 	m.accessService = accessService
 	m.userMarketplaceService = userMarketplaceService
 	m.tokenService = tokenService
+	m.userService = userService
+	m.teamService = teamService
+	m.jwtService = identityServices.JWT
 	m.loginService = identityServices.Login
 	m.managementAuth = identityhandler.NewManagementAuthenticator(identityServices.JWT, identityServices.Account)
 	m.subscriptionPAT = identityServices.SubscriptionPAT
@@ -261,7 +280,7 @@ func (m *Mod) resolveRepository(ctx context.Context, namespaceSlug, pluginSlug s
 }
 
 func (m *Mod) Load(_ *kernel.Hub) error {
-	if m.jin == nil || m.db == nil || isNil(m.git) || m.tokenService == nil || m.loginService == nil ||
+	if m.jin == nil || m.db == nil || isNil(m.git) || m.tokenService == nil || m.userService == nil || m.teamService == nil || m.jwtService == nil || m.loginService == nil ||
 		m.userMarketplaceService == nil || isNil(m.managementAuth) || isNil(m.subscriptionPAT) || isNil(m.pluginLifecycle) || isNil(m.receiveCoordinator) {
 		return fmt.Errorf("backend dependencies are not assembled; call PostInit after jin, sql, and git dependencies are mapped")
 	}
@@ -271,6 +290,8 @@ func (m *Mod) Load(_ *kernel.Hub) error {
 		distributionhandler.NewMarketplaceJSONHandler(m.accessService).Register(m.jin)
 		distributionhandler.NewUserMarketplaceJSONHandler(m.subscriptionPAT, m.userMarketplaceService).Register(m.jin)
 		identityhandler.NewLoginHandler(m.loginService).Register(m.jin)
+		identityhandler.NewUserHandler(m.userService, m.managementAuth, m.jwtService, m.config.RegistrationEnabled).Register(m.jin)
+		identityhandler.NewTeamHandler(m.teamService, m.managementAuth).Register(m.jin)
 		identityhandler.NewTokenHandler(m.tokenService, m.managementAuth).Register(m.jin)
 		pluginhandler.NewHandler(m.pluginLifecycle, m.managementAuth).Register(m.jin)
 	})

@@ -80,13 +80,14 @@ type Service struct {
 	authorizer   auth.Authorizer
 	provisioner  gitservice.RepositoryProvisioner
 	inspector    gitservice.PluginSourceInspector
+	browser      gitservice.RepositoryBrowser
 	locks        *keyedLocks
 	effectLocker EffectLocker
 	now          func() time.Time
 	newID        func() string
 }
 
-func NewService(db *gorm.DB, authorizer auth.Authorizer, provisioner gitservice.RepositoryProvisioner, inspector gitservice.PluginSourceInspector, effectLocker EffectLocker) (*Service, error) {
+func NewService(db *gorm.DB, authorizer auth.Authorizer, provisioner gitservice.RepositoryProvisioner, inspector gitservice.PluginSourceInspector, effectLocker EffectLocker, browsers ...gitservice.RepositoryBrowser) (*Service, error) {
 	if db == nil || authorizer == nil || provisioner == nil || effectLocker == nil {
 		return nil, errors.New("plugin service requires database, authorizer, repository provisioner, and effect lock")
 	}
@@ -94,8 +95,12 @@ func NewService(db *gorm.DB, authorizer auth.Authorizer, provisioner gitservice.
 	if err != nil {
 		return nil, err
 	}
+	var browser gitservice.RepositoryBrowser
+	if len(browsers) > 0 {
+		browser = browsers[0]
+	}
 	return &Service{
-		db: db, repository: repository, authorizer: authorizer, provisioner: provisioner, inspector: inspector,
+		db: db, repository: repository, authorizer: authorizer, provisioner: provisioner, inspector: inspector, browser: browser,
 		locks: newKeyedLocks(), effectLocker: effectLocker, now: func() time.Time { return time.Now().UTC() }, newID: uuid.NewString,
 	}, nil
 }
@@ -182,6 +187,55 @@ func (service *Service) Get(ctx context.Context, principal auth.Principal, names
 		return PluginView{}, err
 	}
 	return pluginView(namespace.Slug, aggregate), nil
+}
+
+func (service *Service) ListRepositoryRefs(ctx context.Context, principal auth.Principal, namespaceSlug, pluginSlug string) (gitservice.RepositoryRefs, error) {
+	aggregate, err := service.browsableAggregate(ctx, principal, namespaceSlug, pluginSlug)
+	if err != nil {
+		return gitservice.RepositoryRefs{}, err
+	}
+	return service.browser.ListRefs(ctx, aggregate.Repository.ID)
+}
+
+func (service *Service) ReadRepositoryTree(ctx context.Context, principal auth.Principal, namespaceSlug, pluginSlug, revision, path string) (gitservice.RepositoryTree, error) {
+	aggregate, err := service.browsableAggregate(ctx, principal, namespaceSlug, pluginSlug)
+	if err != nil {
+		return gitservice.RepositoryTree{}, err
+	}
+	return service.browser.ReadTree(ctx, aggregate.Repository.ID, revision, path)
+}
+
+func (service *Service) ReadRepositoryBlob(ctx context.Context, principal auth.Principal, namespaceSlug, pluginSlug, revision, path string) (gitservice.RepositoryBlob, error) {
+	aggregate, err := service.browsableAggregate(ctx, principal, namespaceSlug, pluginSlug)
+	if err != nil {
+		return gitservice.RepositoryBlob{}, err
+	}
+	return service.browser.ReadBlob(ctx, aggregate.Repository.ID, revision, path)
+}
+
+func (service *Service) ListRepositoryCommits(ctx context.Context, principal auth.Principal, namespaceSlug, pluginSlug, revision, path string, page, size int) (gitservice.RepositoryCommitPage, error) {
+	aggregate, err := service.browsableAggregate(ctx, principal, namespaceSlug, pluginSlug)
+	if err != nil {
+		return gitservice.RepositoryCommitPage{}, err
+	}
+	return service.browser.ListCommits(ctx, aggregate.Repository.ID, revision, path, page, size)
+}
+
+func (service *Service) browsableAggregate(ctx context.Context, principal auth.Principal, namespaceSlug, pluginSlug string) (Aggregate, error) {
+	if service.browser == nil {
+		return Aggregate{}, ErrUnavailable
+	}
+	_, aggregate, err := service.exactAggregate(ctx, namespaceSlug, pluginSlug)
+	if err != nil {
+		return Aggregate{}, err
+	}
+	if err := service.authorizeExactRead(ctx, principal, aggregate); err != nil {
+		return Aggregate{}, err
+	}
+	if aggregate.Repository.Status != RepositoryStatusReady && aggregate.Repository.Status != RepositoryStatusReadOnly {
+		return Aggregate{}, ErrUnavailable
+	}
+	return aggregate, nil
 }
 
 func (service *Service) Archive(ctx context.Context, principal auth.Principal, namespaceSlug, pluginSlug string) error {

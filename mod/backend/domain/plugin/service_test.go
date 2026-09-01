@@ -224,13 +224,13 @@ func createServiceTestNamespace(t *testing.T, db *gorm.DB, slug string) identity
 	return namespace
 }
 
-func newServiceForTest(t *testing.T, db *gorm.DB, authorizer auth.Authorizer, provisioner gitservice.RepositoryProvisioner, inspector gitservice.PluginSourceInspector) *Service {
+func newServiceForTest(t *testing.T, db *gorm.DB, authorizer auth.Authorizer, provisioner gitservice.RepositoryProvisioner, inspector gitservice.PluginSourceInspector, browsers ...gitservice.RepositoryBrowser) *Service {
 	t.Helper()
 	locker, err := NewDatabaseEffectLocker(db, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := NewService(db, authorizer, provisioner, inspector, locker)
+	service, err := NewService(db, authorizer, provisioner, inspector, locker, browsers...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,6 +303,61 @@ func (authorizer *serviceTestAuthorizer) last() serviceTestAuthorization {
 		return serviceTestAuthorization{}
 	}
 	return authorizer.calls[len(authorizer.calls)-1]
+}
+
+func TestServiceRepositoryBrowsingIsTenantScopedAndNondisclosing(t *testing.T) {
+	db := newServiceTestDatabase(t)
+	alpha := createServiceTestNamespace(t, db, "alpha")
+	bravo := createServiceTestNamespace(t, db, "bravo")
+	alphaPlugin := createServiceTestAggregate(t, db, alpha.ID, "scanner", PluginStatusActive, VisibilityPublic, RepositoryStatusReady, time.Now().UTC())
+	bravoPlugin := createServiceTestAggregate(t, db, bravo.ID, "other", PluginStatusActive, VisibilityPublic, RepositoryStatusReady, time.Now().UTC())
+	browser := &serviceTestBrowser{}
+	service := newServiceForTest(t, db, &serviceTestAuthorizer{}, &serviceTestProvisioner{}, nil, browser)
+	principal := serviceTestPrincipal(t)
+
+	if _, err := service.ReadRepositoryTree(t.Context(), principal, alpha.Slug, alphaPlugin.Plugin.Slug, "main", ""); err != nil {
+		t.Fatalf("ReadRepositoryTree() error = %v", err)
+	}
+	if browser.repositoryID != alphaPlugin.Repository.ID || browser.revision != "main" || browser.path != "" {
+		t.Fatalf("browser invocation = %#v", browser)
+	}
+	if _, err := service.ReadRepositoryBlob(t.Context(), principal, alpha.Slug, bravoPlugin.Plugin.Slug, "main", "README.md"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-tenant ReadRepositoryBlob() error = %v, want ErrNotFound", err)
+	}
+	denied := newServiceForTest(t, db, &serviceTestAuthorizer{deny: true}, &serviceTestProvisioner{}, nil, browser)
+	if _, err := denied.ListRepositoryRefs(t.Context(), principal, alpha.Slug, alphaPlugin.Plugin.Slug); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("denied ListRepositoryRefs() error = %v, want ErrNotFound", err)
+	}
+	withoutBrowser := newServiceForTest(t, db, &serviceTestAuthorizer{}, &serviceTestProvisioner{}, nil)
+	if _, err := withoutBrowser.ListRepositoryRefs(t.Context(), principal, alpha.Slug, alphaPlugin.Plugin.Slug); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("unavailable ListRepositoryRefs() error = %v, want ErrUnavailable", err)
+	}
+}
+
+type serviceTestBrowser struct {
+	repositoryID string
+	revision     string
+	path         string
+}
+
+func (browser *serviceTestBrowser) ListRefs(_ context.Context, repositoryID string) (gitservice.RepositoryRefs, error) {
+	browser.repositoryID = repositoryID
+	return gitservice.RepositoryRefs{}, nil
+}
+
+func (browser *serviceTestBrowser) ReadTree(_ context.Context, repositoryID, revision, path string) (gitservice.RepositoryTree, error) {
+	browser.repositoryID, browser.revision, browser.path = repositoryID, revision, path
+	return gitservice.RepositoryTree{}, nil
+}
+
+func (browser *serviceTestBrowser) ReadBlob(_ context.Context, repositoryID, revision, path string) (gitservice.RepositoryBlob, error) {
+	browser.repositoryID, browser.revision, browser.path = repositoryID, revision, path
+	return gitservice.RepositoryBlob{}, nil
+}
+
+func (browser *serviceTestBrowser) ListCommits(_ context.Context, repositoryID, revision, path string, _, _ int) (gitservice.RepositoryCommitPage, error) {
+	browser.repositoryID, browser.revision, browser.path = repositoryID, revision, path
+	return gitservice.RepositoryCommitPage{}, nil
 }
 
 type serviceTestProvisioner struct {

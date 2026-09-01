@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Esonhugh/MarketplaceServer/pkg/auth"
+	"github.com/Esonhugh/MarketplaceServer/pkg/gitservice"
 	"github.com/juanjiTech/jin"
 )
 
@@ -49,6 +50,15 @@ type lifecycleFake struct {
 	publishErr         error
 	setDefaultErr      error
 	clearDefaultErr    error
+	repositoryRef      string
+	repositoryPath     string
+	repositoryPage     int
+	repositorySize     int
+	repositoryErr      error
+	repositoryRefs     gitservice.RepositoryRefs
+	repositoryTree     gitservice.RepositoryTree
+	repositoryBlob     gitservice.RepositoryBlob
+	repositoryCommits  gitservice.RepositoryCommitPage
 }
 
 func (fake *lifecycleFake) Create(_ context.Context, principal auth.Principal, input CreateInput) (Plugin, error) {
@@ -104,6 +114,26 @@ func (fake *lifecycleFake) SetDefaultVersion(_ context.Context, principal auth.P
 func (fake *lifecycleFake) ClearDefaultVersion(_ context.Context, principal auth.Principal, namespace, plugin string) error {
 	fake.principal, fake.getNamespace, fake.clearDefaultPlugin = principal, namespace, plugin
 	return fake.clearDefaultErr
+}
+
+func (fake *lifecycleFake) ListRepositoryRefs(_ context.Context, principal auth.Principal, namespace, plugin string) (gitservice.RepositoryRefs, error) {
+	fake.principal, fake.getNamespace, fake.getPlugin = principal, namespace, plugin
+	return fake.repositoryRefs, fake.repositoryErr
+}
+
+func (fake *lifecycleFake) ReadRepositoryTree(_ context.Context, principal auth.Principal, namespace, plugin, revision, path string) (gitservice.RepositoryTree, error) {
+	fake.principal, fake.getNamespace, fake.getPlugin, fake.repositoryRef, fake.repositoryPath = principal, namespace, plugin, revision, path
+	return fake.repositoryTree, fake.repositoryErr
+}
+
+func (fake *lifecycleFake) ReadRepositoryBlob(_ context.Context, principal auth.Principal, namespace, plugin, revision, path string) (gitservice.RepositoryBlob, error) {
+	fake.principal, fake.getNamespace, fake.getPlugin, fake.repositoryRef, fake.repositoryPath = principal, namespace, plugin, revision, path
+	return fake.repositoryBlob, fake.repositoryErr
+}
+
+func (fake *lifecycleFake) ListRepositoryCommits(_ context.Context, principal auth.Principal, namespace, plugin, revision, path string, page, size int) (gitservice.RepositoryCommitPage, error) {
+	fake.principal, fake.getNamespace, fake.getPlugin, fake.repositoryRef, fake.repositoryPath, fake.repositoryPage, fake.repositorySize = principal, namespace, plugin, revision, path, page, size
+	return fake.repositoryCommits, fake.repositoryErr
 }
 
 type authenticatorFake struct {
@@ -379,6 +409,61 @@ func TestHandlerRequiresJWTForMutationsAndLists(t *testing.T) {
 		if response.Code != http.StatusUnauthorized || response.Header().Get("WWW-Authenticate") == "" {
 			t.Fatalf("target/response = %q/%d/%s", target, response.Code, response.Body.String())
 		}
+	}
+}
+
+func TestHandlerRepositoryBrowsingDelegatesPaginationAndMapsErrors(t *testing.T) {
+	for name, test := range map[string]struct {
+		target string
+		err    error
+		want   int
+		check  func(*testing.T, *lifecycleFake)
+	}{
+		"tree forwards revision and path": {
+			target: "/api/v1/namespaces/research/plugins/scanner/repository/tree?ref=v1.2.0&path=src/main.go", want: http.StatusOK,
+			check: func(t *testing.T, fake *lifecycleFake) {
+				if fake.repositoryRef != "v1.2.0" || fake.repositoryPath != "src/main.go" || fake.getNamespace != "research" || fake.getPlugin != "scanner" {
+					t.Fatalf("tree delegation = %#v", fake)
+				}
+			},
+		},
+		"commits forwards pagination": {
+			target: "/api/v1/namespaces/research/plugins/scanner/repository/commits?ref=main&path=src&page=2&size=1", want: http.StatusOK,
+			check: func(t *testing.T, fake *lifecycleFake) {
+				if fake.repositoryRef != "main" || fake.repositoryPath != "src" || fake.repositoryPage != 2 || fake.repositorySize != 1 {
+					t.Fatalf("commit delegation = %#v", fake)
+				}
+			},
+		},
+		"missing revision maps not found": {target: "/api/v1/namespaces/research/plugins/scanner/repository/tree?ref=missing", err: gitservice.ErrRevisionNotFound, want: http.StatusNotFound},
+		"missing path maps not found":     {target: "/api/v1/namespaces/research/plugins/scanner/repository/blob?ref=main&path=missing", err: gitservice.ErrPathNotFound, want: http.StatusNotFound},
+		"invalid path maps validation":    {target: "/api/v1/namespaces/research/plugins/scanner/repository/blob?ref=main&path=..%2Fsecret", err: gitservice.ErrInvalidBrowseInput, want: http.StatusUnprocessableEntity},
+		"binary maps conflict":            {target: "/api/v1/namespaces/research/plugins/scanner/repository/blob?ref=main&path=binary", err: gitservice.ErrPathNotText, want: http.StatusConflict},
+		"large blob maps 413":             {target: "/api/v1/namespaces/research/plugins/scanner/repository/blob?ref=main&path=large", err: gitservice.ErrBlobTooLarge, want: http.StatusRequestEntityTooLarge},
+	} {
+		t.Run(name, func(t *testing.T) {
+			service := &lifecycleFake{repositoryErr: test.err}
+			response := httptest.NewRecorder()
+			pluginEngine(t, service, &authenticatorFake{}).ServeHTTP(response, authorizedRequest(http.MethodGet, test.target, ""))
+			if response.Code != test.want {
+				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+			}
+			if test.check != nil {
+				test.check(t, service)
+			}
+		})
+	}
+
+	response := httptest.NewRecorder()
+	pluginEngine(t, &lifecycleFake{}, &authenticatorFake{}).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/namespaces/research/plugins/scanner/repository/refs", nil))
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous repository browse status = %d", response.Code)
+	}
+
+	response = httptest.NewRecorder()
+	pluginEngine(t, &lifecycleFake{}, &authenticatorFake{}).ServeHTTP(response, authorizedRequest(http.MethodGet, "/api/v1/namespaces/research/plugins/scanner/repository/commits?page=0", ""))
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid repository pagination status = %d", response.Code)
 	}
 }
 

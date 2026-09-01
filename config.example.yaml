@@ -35,6 +35,8 @@ git:
 backend:
   # Keep empty. MARKETPLACE_JWT_SECRET takes precedence and must be set in production.
   jwtSecret: ""
+  # Public account registration is disabled unless explicitly enabled by the operator.
+  registrationEnabled: false
 
 frontend:
   disabled: false

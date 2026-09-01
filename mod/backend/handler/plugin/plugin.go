@@ -15,6 +15,7 @@ import (
 
 	managementhandler "github.com/Esonhugh/MarketplaceServer/mod/backend/handler/management"
 	"github.com/Esonhugh/MarketplaceServer/pkg/auth"
+	"github.com/Esonhugh/MarketplaceServer/pkg/gitservice"
 	"github.com/juanjiTech/jin"
 )
 
@@ -50,6 +51,13 @@ type Lifecycle interface {
 	Publish(context.Context, auth.Principal, string, string, PublishInput) (Version, error)
 	SetDefaultVersion(context.Context, auth.Principal, string, string, string) error
 	ClearDefaultVersion(context.Context, auth.Principal, string, string) error
+}
+
+type repositoryLifecycle interface {
+	ListRepositoryRefs(context.Context, auth.Principal, string, string) (gitservice.RepositoryRefs, error)
+	ReadRepositoryTree(context.Context, auth.Principal, string, string, string, string) (gitservice.RepositoryTree, error)
+	ReadRepositoryBlob(context.Context, auth.Principal, string, string, string, string) (gitservice.RepositoryBlob, error)
+	ListRepositoryCommits(context.Context, auth.Principal, string, string, string, string, int, int) (gitservice.RepositoryCommitPage, error)
 }
 
 // Plugin contains only approved management API facts. It must not gain IDs,
@@ -120,6 +128,10 @@ func (handler *Handler) Register(engine *jin.Engine) {
 	engine.POST("/api/v1/namespaces/:namespace/plugins", handler.Create)
 	engine.GET("/api/v1/namespaces/:namespace/plugins/:plugin", handler.Get)
 	engine.GET("/api/v1/namespaces/:namespace/plugins/:plugin/versions", handler.ListVersions)
+	engine.GET("/api/v1/namespaces/:namespace/plugins/:plugin/repository/refs", handler.RepositoryRefs)
+	engine.GET("/api/v1/namespaces/:namespace/plugins/:plugin/repository/tree", handler.RepositoryTree)
+	engine.GET("/api/v1/namespaces/:namespace/plugins/:plugin/repository/blob", handler.RepositoryBlob)
+	engine.GET("/api/v1/namespaces/:namespace/plugins/:plugin/repository/commits", handler.RepositoryCommits)
 	engine.GET("/api/v1/namespaces/:namespace/plugins/:plugin/versions/:tag", handler.GetVersion)
 	engine.DELETE("/api/v1/namespaces/:namespace/plugins/:plugin/default-version", handler.ClearDefaultVersion)
 	// Jin cannot register two wildcard names at the Plugin action segment. One
@@ -350,6 +362,109 @@ func (handler *Handler) GetVersion(c *jin.Context) {
 	renderSuccess(c, http.StatusOK, result)
 }
 
+func (handler *Handler) RepositoryRefs(c *jin.Context) {
+	principal, namespace, plugin, ok := handler.repositoryRequest(c)
+	if !ok {
+		return
+	}
+	service, ok := handler.repositoryLifecycle(c)
+	if !ok {
+		return
+	}
+	result, err := service.ListRepositoryRefs(c.Request.Context(), principal, namespace, plugin)
+	if err != nil {
+		handler.renderServiceError(c, err)
+		return
+	}
+	if result.Branches == nil {
+		result.Branches = []gitservice.RepositoryRef{}
+	}
+	if result.Tags == nil {
+		result.Tags = []gitservice.RepositoryRef{}
+	}
+	renderSuccess(c, http.StatusOK, result)
+}
+
+func (handler *Handler) RepositoryTree(c *jin.Context) {
+	principal, namespace, plugin, ok := handler.repositoryRequest(c)
+	if !ok {
+		return
+	}
+	revision := c.Request.URL.Query().Get("ref")
+	service, ok := handler.repositoryLifecycle(c)
+	if !ok {
+		return
+	}
+	result, err := service.ReadRepositoryTree(c.Request.Context(), principal, namespace, plugin, revision, c.Request.URL.Query().Get("path"))
+	if err != nil {
+		handler.renderServiceError(c, err)
+		return
+	}
+	if result.Entries == nil {
+		result.Entries = []gitservice.RepositoryTreeEntry{}
+	}
+	renderSuccess(c, http.StatusOK, result)
+}
+
+func (handler *Handler) RepositoryBlob(c *jin.Context) {
+	principal, namespace, plugin, ok := handler.repositoryRequest(c)
+	if !ok {
+		return
+	}
+	service, ok := handler.repositoryLifecycle(c)
+	if !ok {
+		return
+	}
+	result, err := service.ReadRepositoryBlob(c.Request.Context(), principal, namespace, plugin, c.Request.URL.Query().Get("ref"), c.Request.URL.Query().Get("path"))
+	if err != nil {
+		handler.renderServiceError(c, err)
+		return
+	}
+	renderSuccess(c, http.StatusOK, result)
+}
+
+func (handler *Handler) RepositoryCommits(c *jin.Context) {
+	principal, namespace, plugin, ok := handler.repositoryRequest(c)
+	if !ok {
+		return
+	}
+	page, size, ok := managementhandler.ParsePagination(c)
+	if !ok {
+		return
+	}
+	service, ok := handler.repositoryLifecycle(c)
+	if !ok {
+		return
+	}
+	result, err := service.ListRepositoryCommits(c.Request.Context(), principal, namespace, plugin, c.Request.URL.Query().Get("ref"), c.Request.URL.Query().Get("path"), page, size)
+	if err != nil {
+		handler.renderServiceError(c, err)
+		return
+	}
+	if result.Items == nil {
+		result.Items = []gitservice.RepositoryCommit{}
+	}
+	renderSuccess(c, http.StatusOK, result)
+}
+
+func (handler *Handler) repositoryLifecycle(c *jin.Context) (repositoryLifecycle, bool) {
+	service, ok := handler.service.(repositoryLifecycle)
+	if !ok || service == nil {
+		renderError(c, http.StatusNotImplemented, "not_implemented", "repository browsing is unavailable")
+		return nil, false
+	}
+	return service, true
+}
+
+func (handler *Handler) repositoryRequest(c *jin.Context) (auth.Principal, string, string, bool) {
+	principal, ok := handler.authenticateRequired(c)
+	if !ok {
+		return auth.Principal{}, "", "", false
+	}
+	namespace, plugin, ok := pluginPath(c)
+	return principal, namespace, plugin, ok
+}
+
 func (handler *Handler) ClearDefaultVersion(c *jin.Context) {
 	principal, ok := handler.authenticateRequired(c)
 	if !ok {
@@ -384,8 +499,14 @@ func (handler *Handler) renderServiceError(c *jin.Context, err error) {
 		renderError(c, http.StatusConflict, "conflict", "request conflicts with current state")
 	case errors.Is(err, ErrGone):
 		renderError(c, http.StatusGone, "gone", "version is no longer available")
-	case errors.Is(err, ErrInvalidInput):
+	case errors.Is(err, ErrInvalidInput), errors.Is(err, gitservice.ErrInvalidBrowseInput):
 		renderError(c, http.StatusUnprocessableEntity, "validation_failed", "request is invalid")
+	case errors.Is(err, gitservice.ErrRevisionNotFound), errors.Is(err, gitservice.ErrPathNotFound):
+		renderError(c, http.StatusNotFound, "not_found", "repository revision or path not found")
+	case errors.Is(err, gitservice.ErrPathNotText):
+		renderError(c, http.StatusConflict, "not_text", "repository path is not a previewable text file")
+	case errors.Is(err, gitservice.ErrBlobTooLarge):
+		renderError(c, http.StatusRequestEntityTooLarge, "preview_too_large", "repository file exceeds the preview limit")
 	default:
 		renderError(c, http.StatusInternalServerError, "internal_error", "internal server error")
 	}
