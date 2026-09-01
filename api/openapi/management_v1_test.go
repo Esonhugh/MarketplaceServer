@@ -14,21 +14,43 @@ import (
 )
 
 const (
-	loginPath          = "/api/v1/auth/login"
-	healthPath         = "/api/v1/health"
-	tokensPath         = "/api/v1/me/tokens"
-	tokenPath          = "/api/v1/me/tokens/{tokenId}"
-	revealPath         = "/api/v1/me/tokens/{tokenId}/reveal"
-	pluginsPath        = "/api/v1/namespaces/{namespace}/plugins"
-	pluginPath         = "/api/v1/namespaces/{namespace}/plugins/{plugin}"
-	pluginVersionsPath = "/api/v1/namespaces/{namespace}/plugins/{plugin}/versions"
-	publishVersionPath = "/api/v1/namespaces/{namespace}/plugins/{plugin}/versions:publish"
-	pluginVersionPath  = "/api/v1/namespaces/{namespace}/plugins/{plugin}/versions/{tag}"
-	archivePluginPath  = "/api/v1/namespaces/{namespace}/plugins/{plugin}:archive"
-	restorePluginPath  = "/api/v1/namespaces/{namespace}/plugins/{plugin}:restore"
-	visibilityPath     = "/api/v1/namespaces/{namespace}/plugins/{plugin}:set-visibility"
-	defaultVersionPath = "/api/v1/namespaces/{namespace}/plugins/{plugin}/versions/{tag}:set-default"
-	clearDefaultPath   = "/api/v1/namespaces/{namespace}/plugins/{plugin}/default-version"
+	loginPath             = "/api/v1/auth/login"
+	healthPath            = "/api/v1/health"
+	tokensPath            = "/api/v1/me/tokens"
+	tokenPath             = "/api/v1/me/tokens/{tokenId}"
+	revealPath            = "/api/v1/me/tokens/{tokenId}/reveal"
+	pluginsPath           = "/api/v1/namespaces/{namespace}/plugins"
+	pluginPath            = "/api/v1/namespaces/{namespace}/plugins/{plugin}"
+	pluginVersionsPath    = "/api/v1/namespaces/{namespace}/plugins/{plugin}/versions"
+	publishVersionPath    = "/api/v1/namespaces/{namespace}/plugins/{plugin}/versions:publish"
+	pluginVersionPath     = "/api/v1/namespaces/{namespace}/plugins/{plugin}/versions/{tag}"
+	repositoryRefsPath    = "/api/v1/namespaces/{namespace}/plugins/{plugin}/repository/refs"
+	repositoryTreePath    = "/api/v1/namespaces/{namespace}/plugins/{plugin}/repository/tree"
+	repositoryBlobPath    = "/api/v1/namespaces/{namespace}/plugins/{plugin}/repository/blob"
+	repositoryCommitsPath = "/api/v1/namespaces/{namespace}/plugins/{plugin}/repository/commits"
+	archivePluginPath     = "/api/v1/namespaces/{namespace}/plugins/{plugin}:archive"
+	restorePluginPath     = "/api/v1/namespaces/{namespace}/plugins/{plugin}:restore"
+	visibilityPath        = "/api/v1/namespaces/{namespace}/plugins/{plugin}:set-visibility"
+	defaultVersionPath    = "/api/v1/namespaces/{namespace}/plugins/{plugin}/versions/{tag}:set-default"
+	clearDefaultPath      = "/api/v1/namespaces/{namespace}/plugins/{plugin}/default-version"
+	capabilitiesPath      = "/api/v1/auth/capabilities"
+	registerPath          = "/api/v1/auth/register"
+	mePath                = "/api/v1/me"
+	adminUsersPath        = "/api/v1/admin/users"
+	adminUserPath         = "/api/v1/admin/users/{userId}"
+	disableUserPath       = "/api/v1/admin/users/{userId}:disable"
+	enableUserPath        = "/api/v1/admin/users/{userId}:enable"
+	systemAdminPath       = "/api/v1/admin/users/{userId}/system-admin"
+	teamsPath             = "/api/v1/teams"
+	teamPath              = "/api/v1/teams/{team}"
+	teamMembersPath       = "/api/v1/teams/{team}/members"
+	teamMemberPath        = "/api/v1/teams/{team}/members/{userId}"
+	teamInvitesPath       = "/api/v1/teams/{team}/invitations"
+	teamInvitePath        = "/api/v1/teams/{team}/invitations/{invitationId}"
+	reissueInvitePath     = "/api/v1/teams/{team}/invitations/{invitationId}:reissue"
+	inboxPath             = "/api/v1/me/team-invitations"
+	acceptInvitePath      = "/api/v1/me/team-invitations/{invitationId}:accept"
+	rejectInvitePath      = "/api/v1/me/team-invitations/{invitationId}:reject"
 )
 
 func TestManagementV1ParsesAndResolvesLocalReferences(t *testing.T) {
@@ -43,10 +65,14 @@ func TestManagementV1PublishesOnlyImplementedSlices(t *testing.T) {
 	document := loadDocument(t, "management-v1.yaml")
 	paths := mapValue(t, document, "paths")
 	want := []string{
-		loginPath, healthPath, tokensPath, tokenPath, revealPath,
-		pluginsPath, pluginPath, archivePluginPath, restorePluginPath,
-		visibilityPath, pluginVersionsPath, publishVersionPath,
+		capabilitiesPath, loginPath, registerPath, healthPath, mePath,
+		adminUsersPath, adminUserPath, disableUserPath, enableUserPath, systemAdminPath,
+		teamsPath, teamPath, teamMembersPath, teamMemberPath, teamInvitesPath,
+		teamInvitePath, reissueInvitePath, inboxPath, acceptInvitePath, rejectInvitePath,
+		tokensPath, tokenPath, revealPath, pluginsPath, pluginPath, archivePluginPath,
+		restorePluginPath, visibilityPath, pluginVersionsPath, publishVersionPath,
 		pluginVersionPath, defaultVersionPath, clearDefaultPath,
+		repositoryRefsPath, repositoryTreePath, repositoryBlobPath, repositoryCommitsPath,
 	}
 	sort.Strings(want)
 	got := sortedKeys(paths)
@@ -76,12 +102,23 @@ func TestManagementV1PublishesOnlyImplementedSlices(t *testing.T) {
 
 func TestManagementV1IdentityResponsesAndSchemas(t *testing.T) {
 	document := loadDocument(t, "management-v1.yaml")
+	assertStatuses(t, operation(t, document, capabilitiesPath, "get"), "200")
+	assertStatuses(t, operation(t, document, registerPath, "post"), "201", "400", "404", "409", "422", "500")
+	assertBearerOnly(t, operation(t, document, mePath, "get"))
+	assertStatuses(t, operation(t, document, mePath, "get"), "200", "401", "403", "404", "500")
 	assertStatuses(t, operation(t, document, loginPath, "post"), "200", "400", "401", "500")
 	assertStatuses(t, operation(t, document, healthPath, "get"), "200")
 	assertStatuses(t, operation(t, document, tokensPath, "get"), "200", "401", "403", "422", "500")
 	assertStatuses(t, operation(t, document, tokensPath, "post"), "201", "400", "401", "403", "422", "500")
 	assertStatuses(t, operation(t, document, tokenPath, "delete"), "204", "401", "403", "404", "500")
 	assertStatuses(t, operation(t, document, revealPath, "post"), "200", "400", "401", "403", "404", "500")
+	assertBearerOnly(t, operation(t, document, adminUsersPath, "get"))
+	assertBearerOnly(t, operation(t, document, adminUsersPath, "post"))
+	assertStatuses(t, operation(t, document, adminUsersPath, "get"), "200", "401", "403", "422", "500")
+	assertStatuses(t, operation(t, document, adminUsersPath, "post"), "201", "400", "401", "403", "409", "422", "500")
+	for _, target := range []struct{ path, method string }{{adminUserPath, "get"}, {adminUserPath, "patch"}, {disableUserPath, "post"}, {enableUserPath, "post"}, {systemAdminPath, "put"}, {systemAdminPath, "delete"}, {teamsPath, "get"}, {teamsPath, "post"}, {teamPath, "get"}, {teamPath, "patch"}, {teamMembersPath, "get"}, {teamMemberPath, "put"}, {teamMemberPath, "delete"}, {teamInvitesPath, "get"}, {teamInvitesPath, "post"}, {teamInvitePath, "delete"}, {reissueInvitePath, "post"}, {inboxPath, "get"}, {acceptInvitePath, "post"}, {rejectInvitePath, "post"}} {
+		assertBearerOnly(t, operation(t, document, target.path, target.method))
+	}
 
 	components := mapValue(t, document, "components")
 	schemas := mapValue(t, components, "schemas")
@@ -103,8 +140,8 @@ func TestManagementV1IdentityResponsesAndSchemas(t *testing.T) {
 	}
 
 	parameters := mapValue(t, components, "parameters")
-	if got := sortedKeys(parameters); !reflect.DeepEqual(got, []string{"Namespace", "Page", "PluginSlug", "Size", "TagName", "TokenId"}) {
-		t.Fatalf("parameters = %v, want deployed identity and Plugin parameters", got)
+	if got := sortedKeys(parameters); !reflect.DeepEqual(got, []string{"InvitationId", "Namespace", "Page", "PluginSlug", "RepositoryPath", "RepositoryRef", "RequiredRepositoryPath", "Size", "TagName", "TeamScope", "TeamSlug", "TokenId", "UserId", "UserStatus"}) {
+		t.Fatalf("parameters = %v, want deployed management parameters", got)
 	}
 	pageSchema := mapValue(t, mapValue(t, parameters, "Page"), "schema")
 	sizeSchema := mapValue(t, mapValue(t, parameters, "Size"), "schema")

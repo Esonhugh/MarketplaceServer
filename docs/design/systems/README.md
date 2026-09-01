@@ -18,4 +18,5 @@ Proposed Management API 的精确 HTTP wire contract 以 [`api/openapi/managemen
 ## 已登记系统
 
 1. [`01-identity-authentication`](01-identity-authentication/)：账号登录、stateless frontend JWT 与用户 PAT 生命周期。
-2. [`02-plugin-lifecycle`](02-plugin-lifecycle/)：Plugin 与 hidden Repository shared-ID aggregate、可恢复 lifecycle、tag-as-Version 与 durable protected receive coordination（design `approved`，implementation not approved）。
+2. [`02-plugin-lifecycle`](02-plugin-lifecycle/)：Plugin 与 hidden Repository shared-ID aggregate、可恢复 lifecycle、tag-as-Version 与 durable protected receive coordination。
+3. [`03-user-team-lifecycle`](03-user-team-lifecycle/)：用户注册、系统管理员用户管理、Team namespace、固定角色 membership 与站内邀请（`implemented`）。

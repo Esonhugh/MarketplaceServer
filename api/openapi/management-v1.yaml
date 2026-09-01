@@ -9,10 +9,12 @@ info:
     Authoritative wire contract for currently implemented management operations
     under `/api/v1`.
 
-    This document contains deployed login, health, current-user personal access
-    token, Plugin lifecycle, and Plugin Version operations. Future Marketplace,
-    team, and distribution credential management paths remain in
-    `management-v1-design.yaml` and are not evidence of runtime availability.
+    This document contains deployed login, registration capability and optional
+    registration, current-user and system-administrator user lifecycle, Team
+    lifecycle, personal access token, Plugin lifecycle, and Plugin Version
+    operations. Future Marketplace and distribution credential management paths
+    remain in `management-v1-design.yaml` and are not evidence of runtime
+    availability.
 
     Git Smart HTTP, distribution endpoints, frontend routes, and the external
     Claude Code `marketplace.json` schema are outside this contract.
@@ -34,8 +36,474 @@ tags:
     description: User-facing Plugins backed by hidden one-to-one Git repositories.
   - name: Plugin versions
     description: Canonical tag-driven Plugin publication.
+  - name: Users
+    description: Current-user profile, registration, and system-administrator user lifecycle.
+  - name: Teams
+    description: Team namespaces, memberships, and in-product invitations.
 
 paths:
+  /api/v1/auth/capabilities:
+    get:
+      operationId: getAuthCapabilities
+      tags: [Authentication]
+      summary: Get public authentication capabilities
+      security: []
+      responses:
+        "200":
+          description: Current public registration capability.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-cache
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthCapabilitiesSuccess"
+
+  /api/v1/auth/register:
+    post:
+      operationId: registerAccount
+      tags: [Authentication]
+      summary: Register an account and issue a management JWT
+      description: This route is registered only when the operator enables public registration; otherwise it returns 404.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserRequest"
+      responses:
+        "201":
+          description: Active account and personal namespace created; a fixed 30-day JWT was issued.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/SecretCacheControl"
+            Pragma:
+              $ref: "#/components/headers/SecretPragma"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginSuccess"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/me:
+    get:
+      operationId: getCurrentUser
+      tags: [Users]
+      summary: Get the authenticated user's safe profile
+      security:
+        - BearerJWT: []
+      responses:
+        "200":
+          description: Current user profile, including system-administrator membership.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/SecretCacheControl"
+            Pragma:
+              $ref: "#/components/headers/SecretPragma"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserSuccess"
+        "401":
+          $ref: "#/components/responses/BearerUnauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/admin/users:
+    get:
+      operationId: listUsers
+      tags: [Users]
+      summary: List users as a system administrator
+      security:
+        - BearerJWT: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+        - $ref: "#/components/parameters/UserStatus"
+      responses:
+        "200":
+          description: Exact user page.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/SecretCacheControl"
+            Pragma:
+              $ref: "#/components/headers/SecretPragma"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserPageSuccess"
+        "401": { $ref: "#/components/responses/BearerUnauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    post:
+      operationId: createUser
+      tags: [Users]
+      summary: Create a user as a system administrator
+      security:
+        - BearerJWT: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserRequest"
+      responses:
+        "201":
+          description: User and personal namespace created.
+          headers:
+            Cache-Control: { $ref: "#/components/headers/SecretCacheControl" }
+            Pragma: { $ref: "#/components/headers/SecretPragma" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserSuccess" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/BearerUnauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/admin/users/{userId}:
+    parameters:
+      - $ref: "#/components/parameters/UserId"
+    get:
+      operationId: getUser
+      tags: [Users]
+      summary: Get a user as a system administrator
+      security:
+        - BearerJWT: []
+      responses:
+        "200":
+          description: Safe user profile.
+          headers:
+            Cache-Control: { $ref: "#/components/headers/SecretCacheControl" }
+            Pragma: { $ref: "#/components/headers/SecretPragma" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserSuccess" }
+        "401": { $ref: "#/components/responses/BearerUnauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    patch:
+      operationId: updateUser
+      tags: [Users]
+      summary: Update a user's display name
+      security:
+        - BearerJWT: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateUserRequest" }
+      responses:
+        "200":
+          description: Updated safe user profile.
+          headers:
+            Cache-Control: { $ref: "#/components/headers/SecretCacheControl" }
+            Pragma: { $ref: "#/components/headers/SecretPragma" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserSuccess" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/BearerUnauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/admin/users/{userId}:disable:
+    parameters: [ { $ref: "#/components/parameters/UserId" } ]
+    post:
+      operationId: disableUser
+      tags: [Users]
+      summary: Disable a user
+      security: [ { BearerJWT: [] } ]
+      responses:
+        "204": { description: User is disabled or was already disabled. }
+        "401": { $ref: "#/components/responses/BearerUnauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/admin/users/{userId}:enable:
+    parameters: [ { $ref: "#/components/parameters/UserId" } ]
+    post:
+      operationId: enableUser
+      tags: [Users]
+      summary: Enable a user
+      security: [ { BearerJWT: [] } ]
+      responses:
+        "204": { description: User is enabled or was already enabled. }
+        "401": { $ref: "#/components/responses/BearerUnauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/admin/users/{userId}/system-admin:
+    parameters: [ { $ref: "#/components/parameters/UserId" } ]
+    put:
+      operationId: grantUserSystemAdmin
+      tags: [Users]
+      summary: Grant system-administrator membership
+      security: [ { BearerJWT: [] } ]
+      responses:
+        "204": { description: System-administrator membership granted idempotently. }
+        "401": { $ref: "#/components/responses/BearerUnauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    delete:
+      operationId: revokeUserSystemAdmin
+      tags: [Users]
+      summary: Revoke system-administrator membership
+      security: [ { BearerJWT: [] } ]
+      responses:
+        "204": { description: System-administrator membership revoked idempotently. }
+        "401": { $ref: "#/components/responses/BearerUnauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/teams:
+    get:
+      operationId: listTeams
+      tags: [Teams]
+      summary: List teams visible to the current user
+      security: [ { BearerJWT: [] } ]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+        - $ref: "#/components/parameters/TeamScope"
+      responses:
+        "200": { description: Exact team page., content: { application/json: { schema: { $ref: "#/components/schemas/TeamPageSuccess" } } } }
+        "401": { $ref: "#/components/responses/BearerUnauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    post:
+      operationId: createTeam
+      tags: [Teams]
+      summary: Create a team namespace
+      security: [ { BearerJWT: [] } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CreateTeamRequest" } } }
+      responses:
+        "201": { description: Team and creator owner membership created., content: { application/json: { schema: { $ref: "#/components/schemas/TeamSuccess" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/BearerUnauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/teams/{team}:
+    parameters: [ { $ref: "#/components/parameters/TeamSlug" } ]
+    get:
+      operationId: getTeam
+      tags: [Teams]
+      summary: Get a team
+      security: [ { BearerJWT: [] } ]
+      responses:
+        "200": { description: Team detail and caller permissions., content: { application/json: { schema: { $ref: "#/components/schemas/TeamSuccess" } } } }
+        "401": { $ref: "#/components/responses/BearerUnauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    patch:
+      operationId: updateTeam
+      tags: [Teams]
+      summary: Update a team's display name
+      security: [ { BearerJWT: [] } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/UpdateTeamRequest" } } }
+      responses:
+        "200": { description: Updated team detail., content: { application/json: { schema: { $ref: "#/components/schemas/TeamSuccess" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/BearerUnauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/teams/{team}/members:
+    parameters: [ { $ref: "#/components/parameters/TeamSlug" } ]
+    get:
+      operationId: listTeamMembers
+      tags: [Teams]
+      summary: List team members
+      security: [ { BearerJWT: [] } ]
+      parameters: [ { $ref: "#/components/parameters/Page" }, { $ref: "#/components/parameters/Size" } ]
+      responses:
+        "200": { description: Exact member page., content: { application/json: { schema: { $ref: "#/components/schemas/TeamMemberPageSuccess" } } } }
+        "401": { $ref: "#/components/responses/BearerUnauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/teams/{team}/members/{userId}:
+    parameters: [ { $ref: "#/components/parameters/TeamSlug" }, { $ref: "#/components/parameters/UserId" } ]
+    put:
+      operationId: putTeamMember
+      tags: [Teams]
+      summary: Create or replace a team member role
+      security: [ { BearerJWT: [] } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/RoleRequest" } } }
+      responses:
+        "200": { description: Created or updated team member., content: { application/json: { schema: { $ref: "#/components/schemas/TeamMemberSuccess" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/BearerUnauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    delete:
+      operationId: removeTeamMember
+      tags: [Teams]
+      summary: Remove a team member
+      security: [ { BearerJWT: [] } ]
+      responses:
+        "204": { description: Team member removed. }
+        "401": { $ref: "#/components/responses/BearerUnauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/teams/{team}/invitations:
+    parameters: [ { $ref: "#/components/parameters/TeamSlug" } ]
+    get:
+      operationId: listTeamInvitations
+      tags: [Teams]
+      summary: List team invitations
+      security: [ { BearerJWT: [] } ]
+      parameters: [ { $ref: "#/components/parameters/Page" }, { $ref: "#/components/parameters/Size" } ]
+      responses:
+        "200": { description: Exact team invitation page., content: { application/json: { schema: { $ref: "#/components/schemas/TeamInvitationPageSuccess" } } } }
+        "401": { $ref: "#/components/responses/BearerUnauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    post:
+      operationId: createTeamInvitation
+      tags: [Teams]
+      summary: Invite an existing user to a team
+      security: [ { BearerJWT: [] } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CreateTeamInvitationRequest" } } }
+      responses:
+        "201": { description: Pending seven-day invitation created., content: { application/json: { schema: { $ref: "#/components/schemas/TeamInvitationSuccess" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/BearerUnauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/teams/{team}/invitations/{invitationId}:
+    parameters: [ { $ref: "#/components/parameters/TeamSlug" }, { $ref: "#/components/parameters/InvitationId" } ]
+    delete:
+      operationId: revokeTeamInvitation
+      tags: [Teams]
+      summary: Revoke a team invitation
+      security: [ { BearerJWT: [] } ]
+      responses:
+        "204": { description: Invitation revoked idempotently. }
+        "401": { $ref: "#/components/responses/BearerUnauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/teams/{team}/invitations/{invitationId}:reissue:
+    parameters: [ { $ref: "#/components/parameters/TeamSlug" }, { $ref: "#/components/parameters/InvitationId" } ]
+    post:
+      operationId: reissueTeamInvitation
+      tags: [Teams]
+      summary: Reissue a team invitation
+      security: [ { BearerJWT: [] } ]
+      responses:
+        "201": { description: Replacement seven-day invitation created., content: { application/json: { schema: { $ref: "#/components/schemas/TeamInvitationSuccess" } } } }
+        "401": { $ref: "#/components/responses/BearerUnauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/me/team-invitations:
+    get:
+      operationId: listCurrentUserTeamInvitations
+      tags: [Teams]
+      summary: List the current user's pending team invitations
+      security: [ { BearerJWT: [] } ]
+      parameters: [ { $ref: "#/components/parameters/Page" }, { $ref: "#/components/parameters/Size" } ]
+      responses:
+        "200": { description: Exact current-user pending invitation page., content: { application/json: { schema: { $ref: "#/components/schemas/TeamInvitationPageSuccess" } } } }
+        "401": { $ref: "#/components/responses/BearerUnauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/me/team-invitations/{invitationId}:accept:
+    parameters: [ { $ref: "#/components/parameters/InvitationId" } ]
+    post:
+      operationId: acceptTeamInvitation
+      tags: [Teams]
+      summary: Accept a current-user team invitation
+      security: [ { BearerJWT: [] } ]
+      responses:
+        "200": { description: Invitation accepted and team membership created., content: { application/json: { schema: { $ref: "#/components/schemas/TeamSuccess" } } } }
+        "401": { $ref: "#/components/responses/BearerUnauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/me/team-invitations/{invitationId}:reject:
+    parameters: [ { $ref: "#/components/parameters/InvitationId" } ]
+    post:
+      operationId: rejectTeamInvitation
+      tags: [Teams]
+      summary: Reject a current-user team invitation
+      security: [ { BearerJWT: [] } ]
+      responses:
+        "204": { description: Invitation rejected. }
+        "401": { $ref: "#/components/responses/BearerUnauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /api/v1/auth/login:
     post:
       operationId: login
@@ -408,6 +876,87 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /api/v1/namespaces/{namespace}/plugins/{plugin}/repository/refs:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+      - $ref: "#/components/parameters/PluginSlug"
+    get:
+      operationId: listPluginRepositoryRefs
+      tags: [Plugins]
+      summary: List browsable branches and tags
+      security: [ { BearerJWT: [] } ]
+      responses:
+        "200": { description: Branches, tags, and default branch, content: { application/json: { schema: { $ref: "#/components/schemas/RepositoryRefsSuccess" } } } }
+        "401": { $ref: "#/components/responses/BearerUnauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/namespaces/{namespace}/plugins/{plugin}/repository/tree:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+      - $ref: "#/components/parameters/PluginSlug"
+    get:
+      operationId: getPluginRepositoryTree
+      tags: [Plugins]
+      summary: Browse a repository tree at a revision
+      security: [ { BearerJWT: [] } ]
+      parameters:
+        - $ref: "#/components/parameters/RepositoryRef"
+        - $ref: "#/components/parameters/RepositoryPath"
+      responses:
+        "200": { description: Direct children of the requested tree, content: { application/json: { schema: { $ref: "#/components/schemas/RepositoryTreeSuccess" } } } }
+        "401": { $ref: "#/components/responses/BearerUnauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/namespaces/{namespace}/plugins/{plugin}/repository/blob:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+      - $ref: "#/components/parameters/PluginSlug"
+    get:
+      operationId: getPluginRepositoryBlob
+      tags: [Plugins]
+      summary: Preview a UTF-8 text blob at a revision
+      description: Rejects binary files and files larger than 1 MiB; never exposes server storage paths.
+      security: [ { BearerJWT: [] } ]
+      parameters:
+        - $ref: "#/components/parameters/RepositoryRef"
+        - $ref: "#/components/parameters/RequiredRepositoryPath"
+      responses:
+        "200": { description: Text file preview, content: { application/json: { schema: { $ref: "#/components/schemas/RepositoryBlobSuccess" } } } }
+        "401": { $ref: "#/components/responses/BearerUnauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { description: File exceeds preview limit, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/namespaces/{namespace}/plugins/{plugin}/repository/commits:
+    parameters:
+      - $ref: "#/components/parameters/Namespace"
+      - $ref: "#/components/parameters/PluginSlug"
+    get:
+      operationId: listPluginRepositoryCommits
+      tags: [Plugins]
+      summary: List commit history at a revision, optionally scoped to a path
+      security: [ { BearerJWT: [] } ]
+      parameters:
+        - $ref: "#/components/parameters/RepositoryRef"
+        - $ref: "#/components/parameters/RepositoryPath"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200": { description: Commit history page, content: { application/json: { schema: { $ref: "#/components/schemas/RepositoryCommitPageSuccess" } } } }
+        "401": { $ref: "#/components/responses/BearerUnauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /api/v1/namespaces/{namespace}/plugins/{plugin}/versions:
     parameters:
       - $ref: "#/components/parameters/Namespace"
@@ -572,6 +1121,38 @@ components:
         Account passwords and PATs are not accepted as management Bearer tokens.
 
   parameters:
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/UUID"
+    InvitationId:
+      name: invitationId
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/UUID"
+    TeamSlug:
+      name: team
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/Slug"
+    TeamScope:
+      name: scope
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: [all]
+    UserStatus:
+      name: status
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: [active, disabled]
     Page:
       name: page
       in: query
@@ -617,6 +1198,24 @@ components:
       required: true
       schema:
         $ref: "#/components/schemas/CanonicalVersionTag"
+    RepositoryRef:
+      name: ref
+      in: query
+      required: true
+      description: Branch name, tag name, or full commit object ID resolved by Git.
+      schema: { type: string, minLength: 1, maxLength: 255 }
+    RepositoryPath:
+      name: path
+      in: query
+      required: false
+      description: Repository-relative slash-separated path; absolute and parent paths are rejected.
+      schema: { type: string, maxLength: 4096 }
+    RequiredRepositoryPath:
+      name: path
+      in: query
+      required: true
+      description: Repository-relative slash-separated file path.
+      schema: { type: string, minLength: 1, maxLength: 4096 }
   headers:
     RequestId:
       description: Framework-generated ULID matching the error body's requestId.
@@ -1062,6 +1661,82 @@ components:
         data:
           $ref: "#/components/schemas/Plugin"
 
+    RepositoryRefItem:
+      type: object
+      additionalProperties: false
+      required: [name, commitSha]
+      properties:
+        name: { type: string }
+        commitSha: { $ref: "#/components/schemas/CommitSHA" }
+    RepositoryRefs:
+      type: object
+      additionalProperties: false
+      required: [defaultRef, branches, tags]
+      properties:
+        defaultRef: { type: string }
+        branches: { type: array, items: { $ref: "#/components/schemas/RepositoryRefItem" } }
+        tags: { type: array, items: { $ref: "#/components/schemas/RepositoryRefItem" } }
+    RepositoryRefsSuccess:
+      type: object
+      required: [data]
+      properties: { data: { $ref: "#/components/schemas/RepositoryRefs" } }
+    RepositoryTreeEntry:
+      type: object
+      additionalProperties: false
+      required: [name, type, size]
+      properties:
+        name: { type: string }
+        type: { type: string, enum: [tree, blob] }
+        size:
+          oneOf: [ { type: integer, minimum: 0 }, { type: "null" } ]
+    RepositoryTree:
+      type: object
+      additionalProperties: false
+      required: [ref, commitSha, path, entries]
+      properties:
+        ref: { type: string }
+        commitSha: { $ref: "#/components/schemas/CommitSHA" }
+        path: { type: string }
+        entries: { type: array, items: { $ref: "#/components/schemas/RepositoryTreeEntry" } }
+    RepositoryTreeSuccess:
+      type: object
+      required: [data]
+      properties: { data: { $ref: "#/components/schemas/RepositoryTree" } }
+    RepositoryBlob:
+      type: object
+      additionalProperties: false
+      required: [ref, commitSha, path, size, content]
+      properties:
+        ref: { type: string }
+        commitSha: { $ref: "#/components/schemas/CommitSHA" }
+        path: { type: string }
+        size: { type: integer, minimum: 0, maximum: 1048576 }
+        content: { type: string, description: UTF-8 text content }
+    RepositoryBlobSuccess:
+      type: object
+      required: [data]
+      properties: { data: { $ref: "#/components/schemas/RepositoryBlob" } }
+    RepositoryCommit:
+      type: object
+      additionalProperties: false
+      required: [sha, subject, authorName, authorEmail, committedAt]
+      properties:
+        sha: { $ref: "#/components/schemas/CommitSHA" }
+        subject: { type: string }
+        authorName: { type: string }
+        authorEmail: { type: string }
+        committedAt: { $ref: "#/components/schemas/Timestamp" }
+    RepositoryCommitPageSuccess:
+      type: object
+      required: [data]
+      properties:
+        data:
+          allOf:
+            - $ref: "#/components/schemas/PageMeta"
+            - type: object
+              required: [items]
+              properties: { items: { type: array, items: { $ref: "#/components/schemas/RepositoryCommit" } } }
+
     PluginVersionStatus:
       type: string
       const: available
@@ -1095,6 +1770,206 @@ components:
       properties:
         data:
           $ref: "#/components/schemas/PluginVersion"
+
+    AuthCapabilities:
+      type: object
+      required: [registrationEnabled]
+      properties:
+        registrationEnabled:
+          type: boolean
+    AuthCapabilitiesSuccess:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/AuthCapabilities"
+    UserStatus:
+      type: string
+      enum: [active, disabled]
+    User:
+      type: object
+      required: [id, username, email, displayName, status, createdAt, updatedAt, systemAdmin]
+      properties:
+        id: { $ref: "#/components/schemas/UUID" }
+        username: { type: string }
+        email:
+          oneOf: [ { type: string, format: email }, { type: "null" } ]
+        displayName: { type: string }
+        status: { $ref: "#/components/schemas/UserStatus" }
+        createdAt: { $ref: "#/components/schemas/Timestamp" }
+        updatedAt: { $ref: "#/components/schemas/Timestamp" }
+        systemAdmin: { type: boolean }
+    CreateUserRequest:
+      type: object
+      required: [username, displayName, password]
+      properties:
+        username: { type: string, minLength: 1 }
+        displayName: { type: string, minLength: 1 }
+        email:
+          oneOf: [ { type: string, format: email }, { type: "null" } ]
+        password: { type: string, minLength: 12, writeOnly: true }
+        status: { $ref: "#/components/schemas/UserStatus" }
+    UpdateUserRequest:
+      type: object
+      required: [displayName]
+      properties:
+        displayName: { type: string, minLength: 1 }
+    UserSuccess:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: "#/components/schemas/User" }
+    UserPageData:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: "#/components/schemas/User" }
+    UserPageSuccess:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: "#/components/schemas/UserPageData" }
+    TeamRole:
+      type: string
+      enum: [owner, admin, maintainer, developer, viewer]
+    TeamPermissions:
+      type: object
+      required: [readMembers, manageMembers, updateSettings, manageOwners]
+      properties:
+        readMembers: { type: boolean }
+        manageMembers: { type: boolean }
+        updateSettings: { type: boolean }
+        manageOwners: { type: boolean }
+    Team:
+      type: object
+      required: [id, slug, displayName, currentUserRole, permissions, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/UUID" }
+        slug: { $ref: "#/components/schemas/Slug" }
+        displayName: { type: string }
+        currentUserRole:
+          oneOf: [ { $ref: "#/components/schemas/TeamRole" }, { type: "null" } ]
+        permissions: { $ref: "#/components/schemas/TeamPermissions" }
+        createdAt: { $ref: "#/components/schemas/Timestamp" }
+        updatedAt: { $ref: "#/components/schemas/Timestamp" }
+    CreateTeamRequest:
+      type: object
+      required: [slug, displayName]
+      properties:
+        slug: { $ref: "#/components/schemas/Slug" }
+        displayName: { type: string, minLength: 1 }
+    UpdateTeamRequest:
+      type: object
+      required: [displayName]
+      properties:
+        displayName: { type: string, minLength: 1 }
+    RoleRequest:
+      type: object
+      required: [role]
+      properties:
+        role: { $ref: "#/components/schemas/TeamRole" }
+    TeamMember:
+      type: object
+      required: [userId, username, displayName, status, role, createdAt, updatedAt]
+      properties:
+        userId: { $ref: "#/components/schemas/UUID" }
+        username: { type: string }
+        displayName: { type: string }
+        status: { $ref: "#/components/schemas/UserStatus" }
+        role: { $ref: "#/components/schemas/TeamRole" }
+        createdAt: { $ref: "#/components/schemas/Timestamp" }
+        updatedAt: { $ref: "#/components/schemas/Timestamp" }
+    TeamMemberSuccess:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: "#/components/schemas/TeamMember" }
+    TeamPageData:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: "#/components/schemas/Team" }
+    TeamPageSuccess:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: "#/components/schemas/TeamPageData" }
+    TeamMemberPageData:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: "#/components/schemas/TeamMember" }
+    TeamMemberPageSuccess:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: "#/components/schemas/TeamMemberPageData" }
+    InvitationStatus:
+      type: string
+      enum: [pending, accepted, rejected, revoked, expired]
+    CreateTeamInvitationRequest:
+      type: object
+      required: [username, role]
+      properties:
+        username: { type: string, minLength: 1 }
+        role: { $ref: "#/components/schemas/TeamRole" }
+    TeamInvitation:
+      type: object
+      required: [id, teamId, teamSlug, teamDisplayName, userId, username, userDisplayName, role, invitedByUserId, inviterUsername, status, expiresAt, acceptedAt, rejectedAt, revokedAt, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/UUID" }
+        teamId: { $ref: "#/components/schemas/UUID" }
+        teamSlug: { $ref: "#/components/schemas/Slug" }
+        teamDisplayName: { type: string }
+        userId: { $ref: "#/components/schemas/UUID" }
+        username: { type: string }
+        userDisplayName: { type: string }
+        role: { $ref: "#/components/schemas/TeamRole" }
+        invitedByUserId: { $ref: "#/components/schemas/UUID" }
+        inviterUsername: { type: string }
+        status: { $ref: "#/components/schemas/InvitationStatus" }
+        expiresAt: { $ref: "#/components/schemas/Timestamp" }
+        acceptedAt: { oneOf: [ { $ref: "#/components/schemas/Timestamp" }, { type: "null" } ] }
+        rejectedAt: { oneOf: [ { $ref: "#/components/schemas/Timestamp" }, { type: "null" } ] }
+        revokedAt: { oneOf: [ { $ref: "#/components/schemas/Timestamp" }, { type: "null" } ] }
+        createdAt: { $ref: "#/components/schemas/Timestamp" }
+        updatedAt: { $ref: "#/components/schemas/Timestamp" }
+    TeamInvitationSuccess:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: "#/components/schemas/TeamInvitation" }
+    TeamInvitationPageData:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: "#/components/schemas/TeamInvitation" }
+    TeamInvitationPageSuccess:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: "#/components/schemas/TeamInvitationPageData" }
+    TeamSuccess:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: "#/components/schemas/Team" }
 
     PageMeta:
       type: object

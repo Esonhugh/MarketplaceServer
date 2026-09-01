@@ -34,7 +34,7 @@
 | 能力 | 状态 | 当前范围 | 主要依据 |
 |---|---|---|---|
 | HTTP 与 SQL 基础设施 | 已实现 | jin HTTP engine；PostgreSQL 生产与 SQLite 单进程开发/测试 GORM 生命周期；其他 driver 拒绝启动 | `mod/jin/`, `mod/sql/` |
-| Identity | 已实现 | 用户、个人 namespace、系统组、成员关系、管理员 bootstrap、password login、固定 30 天 HS256 management JWT 与请求平面专用认证 | `mod/backend/domain/identity/{model,dao,service}/`, `mod/backend/handler/identity/` |
+| Identity | 已实现 | 用户、个人/Team namespace、系统组、Team membership/invitation、可选 public registration、系统管理员 user lifecycle、password login、固定 30 天 HS256 management JWT 与请求平面专用认证 | `mod/backend/domain/identity/{model,dao,service}/`, `mod/backend/handler/identity/` |
 | Personal Access Token | 已实现 | 创建、page/size/total 列表、owner password-confirmed reveal、幂等撤销、三档 preset、状态与可选过期时间 | `mod/backend/domain/identity/service/token_service.go`, `mod/backend/handler/identity/tokens.go` |
 | Authorization | 已实现 | 当前用户、组、namespace、repository、Plugin、Marketplace 资源的 action policy | `mod/backend/domain/authorization/` |
 | 开发 Git Smart HTTP | 已实现 | Plugin-backed advertise/upload-pack；receive-pack 使用受管 hook、quarantine 内严格 source validation、expected-old ref transaction 与 durable coordinator，任一保护检查失败拒绝整次 push | `mod/git/{mod,service,receive}.go`, `mod/git/receive_test.go` |
@@ -44,21 +44,22 @@
 | Plugin lifecycle | 已实现 | shared-ID Plugin/hidden Repository、Git-first provisioning/补偿、tenant-scoped create/list/get、archive/restore/visibility | `mod/backend/domain/plugin/`, `mod/backend/handler/plugin/` |
 | Plugin Version lifecycle | 已实现 | canonical tag publish/list/get、default version、deleted tombstone、manifest snapshot/digest 与 tag move projection 协调 | `mod/backend/domain/plugin/service.go`, `mod/backend/domain/plugin/receive/` |
 | Marketplace authoring | 规划中 | 尚无完整 draft、publish、rollback 管理 API；现有 publication service 不是完整 authoring API | `roadmap.md` |
-| 团队、角色矩阵、审计 | 规划中 | 当前没有 team lifecycle、完整 RBAC 或 append-only audit API | `roadmap.md` |
+| Team lifecycle 与角色矩阵 | 已实现 | Team namespace、固定五角色、member/invitation lifecycle 及对 Plugin/Git policy 的即时授权；没有 append-only audit query API | `mod/backend/domain/identity/service/team_service.go`, `mod/backend/domain/authorization/` |
 | SSH Git | 规划中 | 当前没有 SSH listener、公钥认证或 transport wiring | `roadmap.md` |
-| Identity 管理前端 | 已实现 | login/session 与当前用户 PAT list/create/reveal/revoke UI；静态嵌入和 SPA boundary 保持不变 | `mod/frontend/web/src/`, `mod/frontend/` |
-| 完整管理前端 | 规划中 | namespace、team、Plugin、Marketplace、audit 等完整管理页面尚未交付 | `roadmap.md` |
+| Identity 管理前端 | 已实现 | login/session、registration、当前用户/PAT、管理员用户以及 Team/invitation management UI；静态嵌入和 SPA boundary 保持不变 | `mod/frontend/web/src/`, `mod/frontend/` |
+| Plugin 管理前端 | 已实现 | namespace-scoped create/list、项目详情、版本/default、visibility、archive/restore，以及 branch/tag tree、UTF-8 text blob 和 path commit history 浏览 | `mod/frontend/web/src/{PluginsPage,PluginPage}.svelte` |
+| 完整管理前端 | 规划中 | first-run setup、通用 namespace、Marketplace、credential、audit 等管理页面尚未交付 | `roadmap.md` |
 
 ## 当前 backend 领域
 
 `mod/backend/mod.go` 当前统一装配四个内部领域：
 
-- `domain/identity`：按 `model`、`dao`、`service` package 隔离持久化 record、GORM 查询/迁移与业务/认证逻辑；HTTP 协议在 `handler/identity`；
+- `domain/identity`：按 `model`、`dao`、`service` package 隔离用户、Team namespace/membership/invitation、持久化 record、GORM 查询/迁移与业务/认证逻辑；HTTP 协议在 `handler/identity`；
 - `domain/authorization`：实现 management、Git 与 distribution 共用的 action policy；
 - `domain/plugin`：实现 shared-ID Plugin/hidden Repository 聚合、Version、受保护 receive 协调与可调用 recovery；HTTP 协议在 `handler/plugin`；
 - `domain/distribution`：只解析 ready projection pointer/artifact chain 和用户动态索引。
 
-这些领域都是同一 backend 内部的分层，不是新增 kernel module，也不通过全局 DI 暴露 DAO 或 GORM model。`teams` 和 `audit` 可以成为未来的 backend 内部领域，但当前尚不存在。Marketplace persistence/publication 基础已存在于 distribution/plugin 领域，完整 authoring API 尚未交付。
+这些领域都是同一 backend 内部的分层，不是新增 kernel module，也不通过全局 DI 暴露 DAO 或 GORM model。Team lifecycle 归属 identity；append-only audit 仍是未来 backend 内部领域。Marketplace persistence/publication 基础已存在于 distribution/plugin 领域，完整 authoring API 尚未交付。
 
 ## 当前路由
 
@@ -69,6 +70,31 @@
 | Method | Path | 认证 |
 |---|---|---|
 | `POST` | `/api/v1/auth/login` | 无；body 为账号 username/password |
+| `GET` | `/api/v1/auth/capabilities` | 无；返回 `registrationEnabled` |
+| `POST` | `/api/v1/auth/register` | 无；仅 operator 启用 registration 时注册，否则 route 不存在 |
+| `GET` | `/api/v1/me` | Bearer JWT |
+| `GET` | `/api/v1/admin/users` | Bearer JWT + system-admin |
+| `POST` | `/api/v1/admin/users` | Bearer JWT + system-admin |
+| `GET` | `/api/v1/admin/users/:userId` | Bearer JWT + system-admin |
+| `PATCH` | `/api/v1/admin/users/:userId` | Bearer JWT + system-admin |
+| `POST` | `/api/v1/admin/users/:userId:disable` | Bearer JWT + system-admin |
+| `POST` | `/api/v1/admin/users/:userId:enable` | Bearer JWT + system-admin |
+| `PUT` | `/api/v1/admin/users/:userId/system-admin` | Bearer JWT + system-admin |
+| `DELETE` | `/api/v1/admin/users/:userId/system-admin` | Bearer JWT + system-admin |
+| `GET` | `/api/v1/teams` | Bearer JWT；`scope=all` 仅 system-admin |
+| `POST` | `/api/v1/teams` | Bearer JWT |
+| `GET` | `/api/v1/teams/:team` | Bearer JWT + membership/system-admin |
+| `PATCH` | `/api/v1/teams/:team` | Bearer JWT + owner/admin/system-admin |
+| `GET` | `/api/v1/teams/:team/members` | Bearer JWT + membership/system-admin |
+| `PUT` | `/api/v1/teams/:team/members/:userId` | Bearer JWT + role-management authority |
+| `DELETE` | `/api/v1/teams/:team/members/:userId` | Bearer JWT + role-management authority |
+| `GET` | `/api/v1/teams/:team/invitations` | Bearer JWT + owner/admin/system-admin |
+| `POST` | `/api/v1/teams/:team/invitations` | Bearer JWT + role-management authority |
+| `DELETE` | `/api/v1/teams/:team/invitations/:invitationId` | Bearer JWT + owner/admin/system-admin |
+| `POST` | `/api/v1/teams/:team/invitations/:invitationId:reissue` | Bearer JWT + owner/admin/system-admin |
+| `GET` | `/api/v1/me/team-invitations` | Bearer JWT |
+| `POST` | `/api/v1/me/team-invitations/:invitationId:accept` | Bearer JWT + target identity |
+| `POST` | `/api/v1/me/team-invitations/:invitationId:reject` | Bearer JWT + target identity |
 | `GET` | `/api/v1/health` | 无 |
 | `GET` | `/api/v1/me/tokens` | Bearer JWT |
 | `POST` | `/api/v1/me/tokens` | Bearer JWT |
@@ -85,6 +111,10 @@
 | `POST` | `/api/v1/namespaces/:namespace/plugins/:plugin/versions:publish` | Bearer JWT + `plugin.publish` |
 | `POST` | `/api/v1/namespaces/:namespace/plugins/:plugin/versions/:tag:set-default` | Bearer JWT + `plugin.publish` |
 | `DELETE` | `/api/v1/namespaces/:namespace/plugins/:plugin/default-version` | Bearer JWT + `plugin.publish` |
+| `GET` | `/api/v1/namespaces/:namespace/plugins/:plugin/repository/refs` | Bearer JWT + `plugin.read` |
+| `GET` | `/api/v1/namespaces/:namespace/plugins/:plugin/repository/tree` | Bearer JWT + `plugin.read`；query 为 `ref` 与可选 `path` |
+| `GET` | `/api/v1/namespaces/:namespace/plugins/:plugin/repository/blob` | Bearer JWT + `plugin.read`；仅不超过 1 MiB 的 UTF-8 text blob |
+| `GET` | `/api/v1/namespaces/:namespace/plugins/:plugin/repository/commits` | Bearer JWT + `plugin.read`；支持可选 path 与 page/size |
 
 ### 开发 Git Smart HTTP
 
@@ -114,9 +144,10 @@
 Identity 当前迁移：
 
 - users
-- namespaces
+- personal and Team namespaces
 - system groups
 - user/group memberships
+- Team memberships and Team invitations
 - personal access tokens、三档 cumulative preset、repeatably revealable plaintext 与 HMAC lookup index
 
 Plugin 与 distribution 当前迁移：
@@ -130,7 +161,7 @@ Plugin 与 distribution 当前迁移：
 - Marketplace distributions
 - Plugin distributions
 
-Identity 字段以 `mod/backend/domain/identity/model/model.go` 为准，查询与 migration/legacy guard 以 `mod/backend/domain/identity/dao/` 为准；其他领域仍以各自 model/migrate 源码为准。当前没有 team、invitation、audit、outbox、job、session 或 SSH key migration。
+Identity 字段以 `mod/backend/domain/identity/model/` 为准，查询与 migration/legacy guard 以 `mod/backend/domain/identity/dao/` 为准；其他领域仍以各自 model/migrate 源码为准。当前没有 audit、outbox、job、session 或 SSH key migration。
 
 ## 当前配置
 
@@ -148,10 +179,10 @@ Identity 字段以 `mod/backend/domain/identity/model/model.go` 为准，查询�
 
 - Identity migration 发现旧 `personal_access_token_scopes` 或缺少 `preset`/`secret_plaintext`/`secret_hmac` 的旧 PAT table 时拒绝启动，不提供自动 backfill 或 destructive migration；开发环境需在确认无需保留数据后由 operator 重建数据库，非开发环境必须先备份并设计显式迁移。
 - 没有 SSH Git transport。
-- 没有完整 team lifecycle、五角色矩阵和审计查询。
+- 没有 append-only audit storage/query API；当前 lifecycle mutation 仅产生结构化安全日志。
 - Plugin 不提供独立 Repository CRUD 或物理删除；这是 shared-ID hidden Repository 产品边界，不是缺失的独立资源 API。
 - 没有完整 Marketplace draft/publish/rollback 管理 API；receive/orphan/projection recovery 目前是可调用基础能力，尚无常驻 worker 调度。
-- frontend 已交付 login 与当前用户 PAT management，但 namespace/team/Plugin/Marketplace/audit 页面仍未实现，不等于完整管理 UI。
+- frontend 已交付 login、registration、当前用户 PAT、管理员用户、Team/invitation 和 Plugin 项目管理；first-run setup、通用 namespace、Marketplace、credential 与 audit 页面仍未实现，不等于完整管理 UI。
 - PostgreSQL-backed 测试需要 `MARKETPLACE_TEST_POSTGRES_DSN`；未设置时会显式跳过。
 
 ## 相关文档

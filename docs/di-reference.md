@@ -29,6 +29,7 @@ hub.Invoke(func(db *gorm.DB) { ... })
 | `gitservice.RepositoryService` (`github.com/Esonhugh/MarketplaceServer/pkg/gitservice`) | `mod/git` 在 `Init()` 创建 Git filesystem/process contract 并 Map | PostInit 起 | `mod/backend` 在 `PostInit()` 组装服务；方法只接受已解析并严格校验的不透明 repository ID/storage key |
 | `gitservice.RepositoryProvisioner` | `mod/git` 在 `Init()` Map Git-first bare repository provisioning 与受管 receive hook 安装能力 | PostInit 起 | `mod/backend` Plugin create；返回 receipt 用于精确补偿，不暴露物理路径 |
 | `gitservice.RepositoryOrphanCleaner` | `mod/git` 在 `Init()` Map receipt-bound orphan cleanup | PostInit 起 | `mod/backend` Plugin recovery；只清理由持久化 cleanup record 指定的 provision receipt |
+| `gitservice.RepositoryBrowser` | `mod/git` 在 `Init()` Map refs/tree/blob/history 只读浏览 contract | PostInit 起 | `mod/backend` Plugin management；只接收授权后解析出的 opaque repository ID，text blob preview 上限为 1 MiB |
 | `gitservice.PluginSourceInspector` | `mod/git` 在 `Init()` Map strict source inspection | PostInit 起 | `mod/backend` Version publish；解析 raw tag/peeled commit，在隔离目录验证 manifest 并返回 snapshot/digest |
 | `gitservice.ProjectionBuilder` | `mod/git` 在 `Init()` Map 发布侧 immutable artifact builder | PostInit 起 | `mod/backend` publication 与 protected tag-move prebuild；distribution 请求 handler 不得加载此 contract |
 | `gitservice.ProjectionRefReader` | `mod/git` 在 `Init()` Map projection ref 只读检查能力 | PostInit 起 | `mod/backend` receive recovery 判断 artifact/ref 实际状态；不允许移动 ref |
@@ -45,7 +46,7 @@ hub.Invoke(func(db *gorm.DB) { ... })
 
 - `jin`：消费 `cmux.CMux`；提供 `*jin.Engine`。
 - `sql`：提供 `*gorm.DB`。
-- `git`：在 `Init()` 提供 `gitservice.RepositoryService`、`RepositoryProvisioner`、`RepositoryOrphanCleaner`、`PluginSourceInspector`、`ProjectionBuilder`、`ProjectionRefReader` 与 `DistributionReader`；在 `Load()` 消费 `*jin.Engine`、`gitservice.RepositoryResolver`、`gitservice.ReceiveCoordinator`、`distributionservice.Resolver`、`auth.GitPATAuthenticator` 与 `auth.Authorizer`，注册 Git Smart HTTP 和 Public distribution routes。物理路径固定由 opaque ID/storage key 计算，不接受 URL slug。Marketplace public route 只接受 public key，不提供旧 UUID route；Plugin distribution route 仍接受 UUID。
+- `git`：在 `Init()` 提供 `gitservice.RepositoryService`、`RepositoryProvisioner`、`RepositoryOrphanCleaner`、`RepositoryBrowser`、`PluginSourceInspector`、`ProjectionBuilder`、`ProjectionRefReader` 与 `DistributionReader`；在 `Load()` 消费 `*jin.Engine`、`gitservice.RepositoryResolver`、`gitservice.ReceiveCoordinator`、`distributionservice.Resolver`、`auth.GitPATAuthenticator` 与 `auth.Authorizer`，注册 Git Smart HTTP 和 Public distribution routes。物理路径固定由 opaque ID/storage key 计算，不接受 URL slug。Marketplace public route 只接受 public key，不提供旧 UUID route；Plugin distribution route 仍接受 UUID。
 - `backend`：在 `PostInit()` 消费 `*jin.Engine`、`*gorm.DB` 及上述 Git-side contracts，组装 shared-ID Plugin lifecycle、Version、receive coordination 与 recovery，并提供窄 `gitservice.RepositoryResolver`、`gitservice.ReceiveCoordinator`、`distributionservice.Resolver`、`auth.GitPATAuthenticator` 与 `auth.Authorizer` contract；projection resolver 按 Marketplace public key 或 Plugin distribution UUID 定位 ready pointer/artifact chain。Identity/Plugin 的 record、DAO、具体 service、management JWT authenticator 与 PAT management service 保持 backend 内部对象，不向全局 DI 暴露。
 - `frontend`：消费 `*jin.Engine`；只注册嵌入式静态资源和 `NoRoute` fallback，不提供共享 DI 类型。
 

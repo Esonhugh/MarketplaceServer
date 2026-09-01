@@ -45,15 +45,14 @@ Login、固定 30 天 HS256 JWT、management Bearer-only、PAT 三档 preset、�
 - Recheck active account and current Marketplace authorization on every request.
 - Support the same credential in HTTP JSON Authorization headers and Git Credential Helper flows without embedding passwords in URLs.
 
-## Then: teams, RBAC, and audit
+## Then: audit and identity extensions
 
-- Add team namespaces, team lifecycle, invitations, and membership management.
-- Implement owner, admin, maintainer, developer, and viewer action matrices.
-- Keep system administration distinct from team ownership and audit cross-tenant administration explicitly.
+Team namespaces, fixed owner/admin/maintainer/developer/viewer roles, memberships, existing-user invitations, system-administrator user lifecycle, optional registration, and immediate policy reevaluation on departure/disable are implemented; see [current-state.md](current-state.md). Remaining work:
+
+- Keep system administration distinct from team ownership and add durable cross-tenant administration audit evidence.
 - Add service accounts and separately scoped automation credentials.
 - Add append-only audit storage and tenant-scoped audit query APIs.
 - Add transactional outbox events for high-risk control-plane mutations.
-- Verify immediate permission loss when a user leaves a team or is disabled.
 
 ## Then: SSH Git and transport parity
 
@@ -67,12 +66,13 @@ Login、固定 30 天 HS256 JWT、management Bearer-only、PAT 三档 preset、�
 
 ## Then: complete the Svelte management frontend
 
-Login 与当前用户 PAT management 页面已实现；first-run setup 和其余管理流程仍未交付。
+Login、registration、当前用户 PAT、管理员用户、Team/invitation 与 Plugin management 页面已实现。Plugin 项目页已提供 HTTPS clone URL、版本/default/visibility/archive 操作，以及 branch/tag tree、受限 text blob 和 commit history 浏览；hidden Repository 仍不暴露独立产品 identity。first-run setup 和其余管理流程仍未交付。
 
 - Implement first-run setup flow.
-- Add namespace switching and user/team management.
-- Add Plugin, version, Marketplace, credential, and audit pages; repository details remain hidden behind the Plugin product model.
-- Display HTTPS and SSH clone/install instructions without exposing secrets.
+- Add generic namespace switching beyond the implemented personal/Team Plugin selector.
+- Add Marketplace, credential, and audit pages.
+- Extend repository browsing with commit detail/diff and syntax-aware rendering without exposing a separate Repository CRUD model.
+- Display future SSH clone/install instructions without exposing secrets.
 - Use one handwritten API client, local page state, and explicit list/detail refetch after mutations; do not add a global query/cache framework initially.
 - Handle loading, empty, forbidden, not-found, conflict, and retry states.
 - Add keyboard navigation, focus management, semantic labels, and accessible dialogs.
