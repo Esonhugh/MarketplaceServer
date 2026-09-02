@@ -1,0 +1,8 @@
+{
+  "name": "test-generation-assistant",
+  "version": "0.1.0",
+  "description": "Generates focused tests from existing behavior and repository conventions.",
+  "author": {
+    "name": "MarketplaceServer Examples"
+  }
+}
