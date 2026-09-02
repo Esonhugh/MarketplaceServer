@@ -108,8 +108,15 @@ func TestEmbeddedIndexReferencesExistingAssets(t *testing.T) {
 func TestSPAFallbackServesIndexForNavigation(t *testing.T) {
 	engine := loadFrontendForTest(t, Config{})
 
-	rec := performRequest(engine, http.MethodGet, "/dashboard")
-	assertIndexResponse(t, rec)
+	for _, requestPath := range []string{
+		"/dashboard",
+		"/plugins/alice/browser-plugin/code/src/index.js",
+	} {
+		t.Run(requestPath, func(t *testing.T) {
+			rec := performRequest(engine, http.MethodGet, requestPath)
+			assertIndexResponse(t, rec)
+		})
+	}
 }
 
 func TestReservedPathsDoNotFallback(t *testing.T) {

@@ -120,7 +120,7 @@ func (s *staticServer) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if filepath.Ext(filePath) != "" {
+	if filepath.Ext(filePath) != "" && isStaticResourcePath(filePath) {
 		notFound(w, r)
 		return
 	}
@@ -234,6 +234,10 @@ func hasDotDotSegment(p string) bool {
 		}
 	}
 	return false
+}
+
+func isStaticResourcePath(p string) bool {
+	return strings.HasPrefix(p, "assets/") || !strings.Contains(p, "/")
 }
 
 func isReservedPath(p string) bool {

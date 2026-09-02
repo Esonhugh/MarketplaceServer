@@ -242,7 +242,9 @@ receive coordinator 在专用 PostgreSQL session 上持有 session-level advisor
 
 浏览器验收发现登录与注册后 App shell 未立即刷新 profile，曾导致管理员导航缺失或沿用旧 profile；现由 App 统一接管认证后路由/profile 加载，并增加回归测试。嵌入 token 页面不再重复显示 logout。仓库 revision selector 已补充稳定 `id`，消除表单可访问性告警。
 
-网络检查中业务请求均返回预期 2xx；目录探测先请求 blob 得到 409、再读取 tree 得到 200，是当前浏览器的类型判定流程，不是失败状态。控制台只剩静态 favicon 404，不影响 API 与状态一致性。
+深链接验收还发现带文件扩展名的仓库 blob URL（例如 `/code/src/index.js`）被静态服务器误判为缺失资源并返回 404。现仅对 `/assets/*` 和根级静态文件保留“不 fallback”规则，嵌套前端路由统一返回 SPA index，并新增回归测试。直接刷新该深链接后 document、profile、Plugin、refs 与 blob 请求均为 200。
+
+网络检查中业务请求均返回预期 2xx；目录探测先请求 blob 得到 409、再读取 tree 得到 200，是当前浏览器的类型判定流程，不是失败状态。控制台只剩静态 favicon 404，不影响 API 与状态一致性。分别在 500×844 和 1280×877 viewport 验证仓库 blob 页面，均无水平溢出。
 
 ## 验证命令
 
