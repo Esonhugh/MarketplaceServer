@@ -2,6 +2,7 @@
 
 MarketplaceServer 是基于 jframe 模块化内核的 Claude Code Plugin 与 Marketplace 自托管控制、Git 托管和分发服务。本文只保留 Agent 必须始终读取的文档索引与不可违反规则；详细设计统一维护在 `docs/`。
 
+
 ## 文档索引
 
 按任务选择相关文档，不要把根指南当作完整产品规格：
