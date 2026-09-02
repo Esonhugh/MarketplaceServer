@@ -4,6 +4,8 @@
   import { clearSession, loadSession, saveSession } from './session.js';
 
   export let apiClient = createApiClient({ getSession: loadSession, clearSession });
+  export let onAuthenticated = () => false;
+  export let showLogout = true;
 
   const presets = [
     { value: 'sub-read', label: 'Subscription read' },
@@ -129,6 +131,7 @@
       if (generation !== loginGeneration) return;
       invalidateRequests();
       saveSession({ username: result.username, token: result.token });
+      if (onAuthenticated()) return;
       session = { username: result.username, token: result.token };
       password = '';
       page = 1;
@@ -337,7 +340,7 @@
   </section>
 {:else}
   <section class="page">
-    <header class="page-header"><div><p class="eyebrow">Developer settings</p><h1>Personal access tokens</h1><p class="muted">Credentials owned by {session.username}.</p></div><button class="secondary" type="button" onclick={logout}>Log out</button></header>
+    <header class="page-header"><div><p class="eyebrow">Developer settings</p><h1>Personal access tokens</h1><p class="muted">Credentials owned by {session.username}.</p></div>{#if showLogout}<button class="secondary" type="button" onclick={logout}>Log out</button>{/if}</header>
     <form class="panel form-inline" onsubmit={createToken}>
       <h2>Create token</h2>
       <label for="token-name">Token name</label><input class="field" id="token-name" maxlength="128" required bind:value={tokenName} />

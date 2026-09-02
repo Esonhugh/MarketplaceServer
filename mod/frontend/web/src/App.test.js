@@ -37,10 +37,31 @@ afterEach(() => {
 });
 
 describe('identity console', () => {
+  it('loads the registered user profile immediately after signup', async () => {
+    window.history.replaceState({}, '', '/register');
+    const user = userEvent.setup();
+    const client = api({
+      capabilities: vi.fn().mockResolvedValue({ registrationEnabled: true }),
+      register: vi.fn().mockResolvedValue({ username: 'alice', token: 'jwt-token' }),
+      me: vi.fn().mockResolvedValue({ username: 'alice', systemAdmin: false }),
+    });
+    render(App, { props: { apiClient: client } });
+
+    await user.type(await screen.findByLabelText('Username'), 'alice');
+    await user.type(screen.getByLabelText('Display name'), 'Alice');
+    await user.type(screen.getByLabelText('Password'), 'correct horse battery staple');
+    await user.click(screen.getByRole('button', { name: 'Create account' }));
+
+    expect(await screen.findByText('Credentials owned by alice.')).toBeInTheDocument();
+    await waitFor(() => expect(client.me).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('link', { name: 'Users' })).not.toBeInTheDocument();
+  });
+
   it('logs in without persisting the password and logs out', async () => {
     const user = userEvent.setup();
     const client = api({
       login: vi.fn().mockResolvedValue({ username: 'alice', token: 'jwt-token', expiresAt: '2026-09-11T12:00:00Z' }),
+      me: vi.fn().mockResolvedValue({ username: 'alice', systemAdmin: true }),
     });
     render(App, { props: { apiClient: client } });
 
@@ -56,8 +77,9 @@ describe('identity console', () => {
       'marketplace.username',
     ]);
     expect(document.body.textContent).not.toContain('correct horse');
+    expect(await screen.findByRole('link', { name: 'Users' })).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Log out' }));
+    await user.click(screen.getAllByRole('button', { name: 'Log out' })[0]);
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
     expect(localStorage.length).toBe(0);
   });

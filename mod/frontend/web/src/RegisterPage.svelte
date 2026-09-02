@@ -2,7 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { saveSession } from './session.js';
   export let apiClient;
-  export let navigate;
+  export let onAuthenticated = () => {};
   let capability = 'loading';
   let error;
   let pending = false;
@@ -22,7 +22,7 @@
     event.preventDefault(); controller?.abort(); controller = new AbortController(); pending = true; error = null;
     try {
       const result = await apiClient.register({ username, displayName, email: email || null, password }, { signal: controller.signal });
-      saveSession(result); password = ''; navigate('/tokens');
+      saveSession(result); onAuthenticated(); password = '';
     } catch (e) { if (e.name !== 'AbortError') error = e; } finally { pending = false; }
   }
 </script>

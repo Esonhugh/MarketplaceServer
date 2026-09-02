@@ -29,6 +29,7 @@
     profileController?.abort(); profileController = new AbortController();
     try { profile = await apiClient.me({ signal: profileController.signal }); } catch (error) { if (error?.status === 401) router.navigate('/login', { replace: true }); }
   }
+  function authenticated() { profileController?.abort(); profile = null; router.navigate('/tokens', { replace: true }); return true; }
   function logout() { clearSession(); profile = null; profileController?.abort(); router.navigate('/login', { replace: true }); }
   onDestroy(() => profileController?.abort());
   $: protectedRoute = !['login', 'register', 'not-found'].includes(route.name);
@@ -54,7 +55,7 @@
       </nav>
       <div class="app-content">
         {#if route.name === 'tokens'}
-          <IdentityPage {apiClient} />
+          <IdentityPage {apiClient} onAuthenticated={authenticated} showLogout={false} />
         {:else if route.name === 'plugins'}
           <PluginsPage {apiClient} profile={profile} />
         {:else if route.name === 'plugin'}
@@ -75,9 +76,9 @@
       </div>
     </div>
   {:else if route.name === 'login'}
-    <IdentityPage {apiClient} />
+    <IdentityPage {apiClient} onAuthenticated={authenticated} />
   {:else if route.name === 'register'}
-    <RegisterPage {apiClient} navigate={router.navigate} />
+    <RegisterPage {apiClient} onAuthenticated={authenticated} />
   {:else}
     <section class="auth-page"><div class="panel"><h1>Page not found</h1><a data-route href="/login">Go to sign in</a></div></section>
   {/if}
