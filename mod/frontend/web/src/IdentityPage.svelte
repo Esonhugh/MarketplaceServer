@@ -1,10 +1,12 @@
-<script>
+<script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { createApiClient } from './api.js';
   import { clearSession, loadSession, saveSession } from './session.js';
+  import type { ApiClient } from './api.js';
+  import { asApiError, isAbortError, type ApiErrorLike, type Session, type Token, type TokenSecret } from './types.js';
 
-  export let apiClient = createApiClient({ getSession: loadSession, clearSession });
-  export let onAuthenticated = () => false;
+  export let apiClient: ApiClient = createApiClient({ getSession: loadSession, clearSession });
+  export let onAuthenticated: () => boolean = () => false;
   export let showLogout = true;
 
   const presets = [
@@ -13,36 +15,37 @@
     { value: 'git-write', label: 'Git write' },
   ];
 
-  let session = null;
+  let session: Session | null = null;
+  type MutationOperation = { controller: AbortController; generation: number; session: number };
   let username = '';
   let password = '';
   let loginPending = false;
-  let loginError = null;
+  let loginError: ApiErrorLike | null = null;
 
-  let items = [];
+  let items: Token[] = [];
   let page = 1;
   let size = 20;
   let total = 0;
-  let listState = 'idle';
-  let listError = null;
+  let listState: 'idle' | 'loading' | 'ready' | 'error' = 'idle';
+  let listError: ApiErrorLike | null = null;
 
   let tokenName = '';
   let preset = 'sub-read';
   let expiresAt = '';
   let createPending = false;
-  let createError = null;
+  let createError: ApiErrorLike | null = null;
 
-  let revealTarget = null;
+  let revealTarget: Token | null = null;
   let revealPassword = '';
   let revealPending = false;
-  let revealError = null;
-  let secret = null;
+  let revealError: ApiErrorLike | null = null;
+  let secret: (TokenSecret & { source: 'created' | 'revealed' }) | null = null;
   let copyState = '';
-  let mutationError = null;
+  let mutationError: ApiErrorLike | null = null;
 
-  let listController;
-  let mutationController;
-  let loginController;
+  let listController: AbortController | undefined;
+  let mutationController: AbortController | undefined;
+  let loginController: AbortController | undefined;
   let listGeneration = 0;
   let mutationGeneration = 0;
   let loginGeneration = 0;
@@ -71,7 +74,7 @@
     loginController?.abort();
   });
 
-  function errorText(error) {
+  function errorText(error: ApiErrorLike | null) {
     if (!error) return '';
     return error.requestId ? `${error.message} (request ${error.requestId})` : error.message || 'Request failed';
   }
@@ -111,15 +114,16 @@
     resetSecret();
   }
 
-  function handleUnauthorized(error) {
-    if (error?.status === 401 && !loadSession()) {
+  function handleUnauthorized(cause: unknown) {
+    const error = asApiError(cause);
+    if (error.status === 401 && !loadSession()) {
       showLogin();
       return true;
     }
     return false;
   }
 
-  async function login(event) {
+  async function login(event: SubmitEvent) {
     event.preventDefault();
     loginController?.abort();
     loginController = new AbortController();
@@ -137,7 +141,7 @@
       page = 1;
       await loadTokens();
     } catch (error) {
-      if (generation === loginGeneration && error?.name !== 'AbortError') loginError = error;
+      if (generation === loginGeneration && !isAbortError(error)) loginError = asApiError(error);
     } finally {
       if (generation === loginGeneration) loginPending = false;
     }
@@ -173,14 +177,14 @@
       total = result.total;
       listState = 'ready';
     } catch (error) {
-      if (error?.name === 'AbortError' || generation !== listGeneration || currentSession !== sessionGeneration) return;
+      if (isAbortError(error) || generation !== listGeneration || currentSession !== sessionGeneration) return;
       if (handleUnauthorized(error)) return;
-      listError = error;
+      listError = asApiError(error);
       listState = 'error';
     }
   }
 
-  function beginMutation(kind) {
+  function beginMutation(kind: string): MutationOperation {
     mutationController?.abort();
     const controller = new AbortController();
     mutationController = controller;
@@ -188,17 +192,17 @@
     return { controller, generation: ++mutationGeneration, session: sessionGeneration };
   }
 
-  function mutationIsCurrent(operation) {
+  function mutationIsCurrent(operation: MutationOperation) {
     return operation.generation === mutationGeneration && operation.session === sessionGeneration;
   }
 
-  function finishMutation(operation) {
+  function finishMutation(operation: MutationOperation) {
     if (!mutationIsCurrent(operation)) return;
     mutationKind = '';
     mutationController = undefined;
   }
 
-  async function createToken(event) {
+  async function createToken(event: SubmitEvent) {
     event.preventDefault();
     const operation = beginMutation('create');
     resetSecret();
@@ -222,14 +226,14 @@
       page = 1;
       await loadTokens();
     } catch (error) {
-      if (mutationIsCurrent(operation) && error?.name !== 'AbortError' && !handleUnauthorized(error)) createError = error;
+      if (mutationIsCurrent(operation) && !isAbortError(error) && !handleUnauthorized(error)) createError = asApiError(error);
     } finally {
       if (mutationIsCurrent(operation)) createPending = false;
       finishMutation(operation);
     }
   }
 
-  function beginReveal(item) {
+  function beginReveal(item: Token) {
     resetSecret();
     revealTarget = item;
     revealPassword = '';
@@ -249,14 +253,16 @@
     revealError = null;
   }
 
-  async function revealToken(event) {
+  async function revealToken(event: SubmitEvent) {
     event.preventDefault();
+    if (!revealTarget) return;
+    const target = revealTarget;
     const operation = beginMutation('reveal');
     resetSecret();
     revealPending = true;
     revealError = null;
     try {
-      const result = await apiClient.revealToken(revealTarget.id, revealPassword, {
+      const result = await apiClient.revealToken(target.id, revealPassword, {
         signal: operation.controller.signal,
       });
       if (!mutationIsCurrent(operation)) return;
@@ -265,14 +271,14 @@
       secret = { token: result.token, name: result.name, source: 'revealed' };
       await loadTokens();
     } catch (error) {
-      if (mutationIsCurrent(operation) && error?.name !== 'AbortError' && !handleUnauthorized(error)) revealError = error;
+      if (mutationIsCurrent(operation) && !isAbortError(error) && !handleUnauthorized(error)) revealError = asApiError(error);
     } finally {
       if (mutationIsCurrent(operation)) revealPending = false;
       finishMutation(operation);
     }
   }
 
-  async function revokeToken(item) {
+  async function revokeToken(item: Token) {
     const operation = beginMutation('revoke');
     mutationError = null;
     try {
@@ -280,7 +286,7 @@
       if (!mutationIsCurrent(operation)) return;
       await loadTokens();
     } catch (error) {
-      if (mutationIsCurrent(operation) && error?.name !== 'AbortError' && !handleUnauthorized(error)) mutationError = error;
+      if (mutationIsCurrent(operation) && !isAbortError(error) && !handleUnauthorized(error)) mutationError = asApiError(error);
     } finally {
       finishMutation(operation);
     }
@@ -288,6 +294,7 @@
 
   async function copySecret() {
     try {
+      if (!secret) return;
       await navigator.clipboard.writeText(secret.token);
       copyState = 'Copied';
     } catch {
@@ -309,13 +316,13 @@
     }
   }
 
-  function changeSize(event) {
-    size = Number(event.currentTarget.value);
+  function changeSize(event: Event) {
+    size = Number((event.currentTarget as HTMLSelectElement).value);
     page = 1;
     loadTokens();
   }
 
-  function formatDate(value) {
+  function formatDate(value: string | null | undefined) {
     return value ? dateFormatter.format(new Date(value)) : 'Never';
   }
 </script>
@@ -347,16 +354,16 @@
       <label for="preset">Preset</label><select class="field" id="preset" bind:value={preset}>{#each presets as option}<option value={option.value}>{option.label}</option>{/each}</select>
       <label for="expires-at">Expires at (optional)</label><input class="field" id="expires-at" type="datetime-local" bind:value={expiresAt} />
       {#if createError}<p class="error" role="alert">{errorText(createError)}</p>{/if}
-      <button class="primary" type="submit" disabled={mutationPending} aria-busy={createPending}>{createPending ? 'Creating…' : 'Create token'}</button>
+      <button class="primary" type="submit" disabled={Boolean(mutationPending)} aria-busy={createPending}>{createPending ? 'Creating…' : 'Create token'}</button>
     </form>
 
     {#if secret}<section class="panel" aria-labelledby="secret-heading"><h2 id="secret-heading">{secret.source === 'created' ? 'Token created' : 'Token revealed'}: {secret.name}</h2><p class="muted">Copy this plaintext before replacing it or logging out.</p><pre class="code-view">{secret.token}</pre><div class="actions"><button class="secondary" type="button" onclick={copySecret}>Copy token</button>{#if copyState}<span aria-live="polite">{copyState}</span>{/if}</div></section>{/if}
-    {#if revealTarget}<form class="panel form-inline" onsubmit={revealToken}><h2>Reveal {revealTarget.name}</h2><label for="reveal-password">Current password</label><input class="field" id="reveal-password" type="password" autocomplete="current-password" required bind:value={revealPassword} />{#if revealError}<p class="error" role="alert">{errorText(revealError)}</p>{/if}<div class="actions"><button class="primary" type="submit" disabled={mutationPending} aria-busy={revealPending}>{revealPending ? 'Revealing…' : 'Reveal token'}</button><button class="secondary" type="button" onclick={cancelReveal}>Cancel</button></div></form>{/if}
+    {#if revealTarget}<form class="panel form-inline" onsubmit={revealToken}><h2>Reveal {revealTarget.name}</h2><label for="reveal-password">Current password</label><input class="field" id="reveal-password" type="password" autocomplete="current-password" required bind:value={revealPassword} />{#if revealError}<p class="error" role="alert">{errorText(revealError)}</p>{/if}<div class="actions"><button class="primary" type="submit" disabled={Boolean(mutationPending)} aria-busy={revealPending}>{revealPending ? 'Revealing…' : 'Reveal token'}</button><button class="secondary" type="button" onclick={cancelReveal}>Cancel</button></div></form>{/if}
 
     <div class="page-header"><div><h2>Your tokens</h2><p class="muted">Revoke credentials that are no longer needed.</p></div><label for="page-size">Page size <select class="field compact" id="page-size" value={size} onchange={changeSize}><option value="10">10</option><option value="20">20</option><option value="50">50</option><option value="100">100</option></select></label></div>
     {#if mutationError}<p class="error" role="alert">{errorText(mutationError)}</p>{/if}
     {#if listState === 'loading'}<p class="panel" role="status">Loading tokens…</p>{:else if listState === 'error'}<div class="panel" role="alert"><p class="error">{errorText(listError)}</p><button class="secondary" type="button" onclick={loadTokens}>Retry</button></div>{:else if listState === 'ready' && items.length === 0}<p class="panel muted">No tokens yet.</p>{:else if listState === 'ready'}
-      <ul class="plain-list">{#each items as item (item.id)}<li class="row"><div><h3>{item.name} <span class:status-active={item.status === 'active'} class:status-expired={item.status === 'expired'} class:status-revoked={item.status === 'revoked'} class="status">{item.status}</span></h3><p class="muted">{item.preset} · expires {formatDate(item.expiresAt)} · last used {formatDate(item.lastUsedAt)}</p></div><div class="actions"><button class="secondary" type="button" aria-label={`Reveal ${item.name}`} disabled={mutationPending} onclick={() => beginReveal(item)}>Reveal</button><button class="danger" type="button" aria-label={`Revoke ${item.name}`} disabled={item.status === 'revoked' || mutationPending} onclick={() => revokeToken(item)}>Revoke</button></div></li>{/each}</ul>
+      <ul class="plain-list">{#each items as item (item.id)}<li class="row"><div><h3>{item.name} <span class:status-active={item.status === 'active'} class:status-expired={item.status === 'expired'} class:status-revoked={item.status === 'revoked'} class="status">{item.status}</span></h3><p class="muted">{item.preset} · expires {formatDate(item.expiresAt)} · last used {formatDate(item.lastUsedAt)}</p></div><div class="actions"><button class="secondary" type="button" aria-label={`Reveal ${item.name}`} disabled={Boolean(mutationPending)} onclick={() => beginReveal(item)}>Reveal</button><button class="danger" type="button" aria-label={`Revoke ${item.name}`} disabled={item.status === 'revoked' || mutationPending} onclick={() => revokeToken(item)}>Revoke</button></div></li>{/each}</ul>
     {/if}
     {#if listState === 'ready' && total > 0}<nav class="row" aria-label="Token pages"><p class="muted">Page {page} of {pageCount} · {total} total</p><div class="actions"><button class="secondary" type="button" aria-label="Previous page" disabled={page <= 1} onclick={previousPage}>Previous</button><button class="secondary" type="button" aria-label="Next page" disabled={page >= pageCount} onclick={nextPage}>Next</button></div></nav>{/if}
   </section>

@@ -1,21 +1,21 @@
 import '@testing-library/jest-dom/vitest';
 
 function storageMock() {
-  const storage = new Map();
+  const storage = new Map<string, string>();
   return {
     get length() {
       return storage.size;
     },
-    key(index) {
+    key(index: number) {
       return [...storage.keys()][index] ?? null;
     },
-    getItem(key) {
+    getItem(key: string) {
       return storage.has(String(key)) ? storage.get(String(key)) : null;
     },
-    setItem(key, value) {
+    setItem(key: string, value: string) {
       storage.set(String(key), String(value));
     },
-    removeItem(key) {
+    removeItem(key: string) {
       storage.delete(String(key));
     },
     clear() {

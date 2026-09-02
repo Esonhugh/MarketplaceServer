@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
   import { onDestroy } from 'svelte';
   import { createApiClient } from './api.js';
   import { clearSession, loadSession } from './session.js';
@@ -11,11 +11,14 @@
   import TeamPage from './TeamPage.svelte';
   import InvitationsPage from './InvitationsPage.svelte';
   import AdminUsersPage from './AdminUsersPage.svelte';
+  import type { ApiClient } from './api.js';
+  import type { Route } from './router.js';
+  import { asApiError, type UserProfile } from './types.js';
 
-  export let apiClient = createApiClient({ getSession: loadSession, clearSession });
-  let route = { name: 'login' };
-  let profile = null;
-  let profileController;
+  export let apiClient: ApiClient = createApiClient({ getSession: loadSession, clearSession });
+  let route: Route = { name: 'login' };
+  let profile: UserProfile | null = null;
+  let profileController: AbortController | undefined;
   let router = useRouter((next) => {
     if (!['login', 'register', 'not-found'].includes(next.name) && !loadSession()) {
       route = { name: 'login' };
@@ -27,7 +30,7 @@
   });
   async function loadProfile() {
     profileController?.abort(); profileController = new AbortController();
-    try { profile = await apiClient.me({ signal: profileController.signal }); } catch (error) { if (error?.status === 401) router.navigate('/login', { replace: true }); }
+    try { profile = await apiClient.me({ signal: profileController.signal }); } catch (cause) { if (asApiError(cause).status === 401) router.navigate('/login', { replace: true }); }
   }
   function authenticated() { profileController?.abort(); profile = null; router.navigate('/tokens', { replace: true }); return true; }
   function logout() { clearSession(); profile = null; profileController?.abort(); router.navigate('/login', { replace: true }); }

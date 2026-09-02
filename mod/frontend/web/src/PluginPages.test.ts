@@ -5,6 +5,7 @@ import App from './App.svelte';
 import PluginPage from './PluginPage.svelte';
 import PluginsPage from './PluginsPage.svelte';
 import { saveSession } from './session.js';
+import type { ApiClient } from './api.js';
 
 const plugin = {
   namespace: 'alice',
@@ -16,7 +17,7 @@ const plugin = {
   defaultVersion: 'v1.0.0',
 };
 
-function client(overrides = {}) {
+function client(overrides = {}): Partial<ApiClient> {
   return {
     listTeams: vi.fn().mockResolvedValue({ items: [], page: 1, size: 100, total: 0 }),
     listPlugins: vi.fn().mockResolvedValue({ items: [plugin], page: 1, size: 100, total: 1 }),
@@ -49,7 +50,7 @@ describe('Plugin pages', () => {
   it('lists a personal namespace and creates a Plugin with the selected visibility', async () => {
     const apiClient = client();
     const user = userEvent.setup();
-    render(PluginsPage, { props: { apiClient, profile: { username: 'alice' } } });
+    render(PluginsPage, { props: { apiClient: apiClient as ApiClient, profile: { username: 'alice' } } });
 
     expect(await screen.findByText('alice / example-plugin')).toBeInTheDocument();
     await user.type(screen.getByLabelText('Plugin name'), 'new-plugin');
@@ -66,7 +67,7 @@ describe('Plugin pages', () => {
   it('loads Plugin detail and publishes or selects canonical versions', async () => {
     const apiClient = client();
     const user = userEvent.setup();
-    render(PluginPage, { props: { apiClient, namespace: 'alice', plugin: 'example-plugin', tab: 'versions' } });
+    render(PluginPage, { props: { apiClient: apiClient as ApiClient, namespace: 'alice', plugin: 'example-plugin', tab: 'versions' } });
 
     expect(await screen.findByText('v1.0.0')).toBeInTheDocument();
     await user.type(screen.getByLabelText('Tag'), 'v1.1.0');
@@ -84,7 +85,7 @@ describe('Plugin pages', () => {
   it('updates visibility and archives a Plugin from settings', async () => {
     const apiClient = client();
     const user = userEvent.setup();
-    render(PluginPage, { props: { apiClient, namespace: 'alice', plugin: 'example-plugin', tab: 'settings' } });
+    render(PluginPage, { props: { apiClient: apiClient as ApiClient, namespace: 'alice', plugin: 'example-plugin', tab: 'settings' } });
 
     expect(await screen.findByRole('button', { name: 'Save visibility' })).toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText('Plugin visibility'), 'private');
@@ -99,7 +100,7 @@ describe('Plugin pages', () => {
     saveSession({ username: 'alice', token: 'jwt-token' });
     window.history.replaceState({}, '', '/plugins/alice/example-plugin/code');
     const apiClient = client({ me: vi.fn().mockResolvedValue({ username: 'alice' }) });
-    render(App, { props: { apiClient } });
+    render(App, { props: { apiClient: apiClient as ApiClient } });
 
     expect(await screen.findByText('Quick setup')).toBeInTheDocument();
     window.history.pushState({}, '', '/plugins/alice/example-plugin/versions');
@@ -114,7 +115,7 @@ describe('Plugin pages', () => {
     window.history.replaceState({}, '', '/plugins');
     const apiClient = client({ me: vi.fn().mockResolvedValue({ username: 'alice' }) });
     const user = userEvent.setup();
-    render(App, { props: { apiClient } });
+    render(App, { props: { apiClient: apiClient as ApiClient } });
 
     expect(await screen.findByRole('button', { name: 'Log out' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Log out' }));

@@ -3,8 +3,10 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from './App.svelte';
 import { saveSession } from './session.js';
+import type { ApiClient } from './api.js';
+import type { Session } from './types.js';
 
-function token(overrides = {}) {
+function token(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: '11111111-1111-1111-1111-111111111111',
     name: 'CI clone',
@@ -18,7 +20,7 @@ function token(overrides = {}) {
   };
 }
 
-function api(overrides = {}) {
+function api(overrides: Partial<ApiClient> = {}): ApiClient {
   return {
     login: vi.fn(),
     listTokens: vi.fn().mockResolvedValue({ items: [], page: 1, size: 20, total: 0 }),
@@ -26,7 +28,7 @@ function api(overrides = {}) {
     revealToken: vi.fn(),
     revokeToken: vi.fn(),
     ...overrides,
-  };
+  } as ApiClient;
 }
 
 afterEach(() => {
@@ -86,12 +88,12 @@ describe('identity console', () => {
 
   it('never saves a delayed login after logout, unmount, or a replacement login', async () => {
     const user = userEvent.setup();
-    let resolveFirst;
-    let resolveUnmounted;
-    const firstLogin = new Promise((resolve) => {
+    let resolveFirst: (session: Session) => void = () => {};
+    let resolveUnmounted: (session: Session) => void = () => {};
+    const firstLogin = new Promise<Session>((resolve) => {
       resolveFirst = resolve;
     });
-    const unmountedLogin = new Promise((resolve) => {
+    const unmountedLogin = new Promise<Session>((resolve) => {
       resolveUnmounted = resolve;
     });
     const client = api({
@@ -108,7 +110,7 @@ describe('identity console', () => {
     await user.click(screen.getByRole('button', { name: 'Sign in' }));
     await user.clear(screen.getByLabelText('Password'));
     await user.type(screen.getByLabelText('Password'), 'second-password');
-    await fireEvent.submit(screen.getByLabelText('Password').closest('form'));
+    await fireEvent.submit(screen.getByLabelText('Password').closest('form')!);
     expect(await screen.findByText('Personal access tokens')).toBeInTheDocument();
     expect(localStorage.getItem('marketplace.jwt')).toBe('new-jwt');
 
@@ -132,8 +134,8 @@ describe('identity console', () => {
 
   it('does not save an older pending login after logout', async () => {
     const user = userEvent.setup();
-    let resolveOldLogin;
-    const oldLogin = new Promise((resolve) => {
+    let resolveOldLogin: (session: Session) => void = () => {};
+    const oldLogin = new Promise<Session>((resolve) => {
       resolveOldLogin = resolve;
     });
     const client = api({
@@ -149,7 +151,7 @@ describe('identity console', () => {
     await user.click(screen.getByRole('button', { name: 'Sign in' }));
     await user.clear(screen.getByLabelText('Password'));
     await user.type(screen.getByLabelText('Password'), 'current-password');
-    await fireEvent.submit(screen.getByLabelText('Password').closest('form'));
+    await fireEvent.submit(screen.getByLabelText('Password').closest('form')!);
     expect(await screen.findByText('Personal access tokens')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Log out' }));
@@ -163,8 +165,8 @@ describe('identity console', () => {
 
   it('shows token loading, empty, error, and retry states', async () => {
     saveSession({ username: 'alice', token: 'jwt-token' });
-    let rejectFirst;
-    const firstRequest = new Promise((_, reject) => {
+    let rejectFirst: (cause?: unknown) => void = () => {};
+    const firstRequest = new Promise<never>((_, reject) => {
       rejectFirst = reject;
     });
     const client = api({
@@ -282,8 +284,8 @@ describe('identity console', () => {
 
   it('ignores stale list responses after pagination changes', async () => {
     saveSession({ username: 'alice', token: 'jwt-token' });
-    let resolveOldPage;
-    const oldPage = new Promise((resolve) => {
+    let resolveOldPage: (page: { items: ReturnType<typeof token>[]; page: number; size: number; total: number }) => void = () => {};
+    const oldPage = new Promise<{ items: ReturnType<typeof token>[]; page: number; size: number; total: number }>((resolve) => {
       resolveOldPage = resolve;
     });
     const client = api({
@@ -309,8 +311,8 @@ describe('identity console', () => {
 
   it('never displays a reveal that finishes after logout', async () => {
     saveSession({ username: 'alice', token: 'jwt-token' });
-    let resolveReveal;
-    const reveal = new Promise((resolve) => {
+    let resolveReveal: (secret: ReturnType<typeof token>) => void = () => {};
+    const reveal = new Promise<ReturnType<typeof token>>((resolve) => {
       resolveReveal = resolve;
     });
     const client = api({
@@ -334,12 +336,12 @@ describe('identity console', () => {
 
   it('does not restore create or reveal plaintext after unmount and never uses sessionStorage', async () => {
     saveSession({ username: 'alice', token: 'jwt-token' });
-    let resolveCreate;
-    let resolveReveal;
-    const create = new Promise((resolve) => {
+    let resolveCreate: (secret: ReturnType<typeof token>) => void = () => {};
+    let resolveReveal: (secret: ReturnType<typeof token>) => void = () => {};
+    const create = new Promise<ReturnType<typeof token>>((resolve) => {
       resolveCreate = resolve;
     });
-    const reveal = new Promise((resolve) => {
+    const reveal = new Promise<ReturnType<typeof token>>((resolve) => {
       resolveReveal = resolve;
     });
     const client = api({

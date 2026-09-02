@@ -56,9 +56,9 @@ describe('identity API client', () => {
 
   it('does not clear a replacement session when an old request receives a delayed 401', async () => {
     saveSession({ username: 'alice', token: 'old-jwt' });
-    let resolveRequest;
+    let resolveRequest: (response: Response) => void = () => {};
     const fetchImpl = vi.fn().mockReturnValue(
-      new Promise((resolve) => {
+      new Promise<Response>((resolve) => {
         resolveRequest = resolve;
       }),
     );
@@ -251,7 +251,8 @@ describe('session storage', () => {
   afterEach(() => localStorage.clear());
 
   it('persists only username and JWT and clears both together', () => {
-    saveSession({ username: 'alice', token: 'jwt-token', password: 'never', expiresAt: 'never' });
+    const loginResult = { username: 'alice', token: 'jwt-token', password: 'never', expiresAt: 'never' };
+    saveSession(loginResult);
 
     expect(localStorage.length).toBe(2);
     expect([localStorage.key(0), localStorage.key(1)].sort()).toEqual(['marketplace.jwt', 'marketplace.username']);
