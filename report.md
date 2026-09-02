@@ -1,6 +1,6 @@
 # MarketplaceServer Plugin lifecycle 运行时审计报告
 
-日期：2026-08-31
+日期：2026-09-02
 
 ## 审计结论
 
@@ -80,8 +80,13 @@ go build -o /tmp/marketplace-debug/marketplace-server .
 | archive 后 push | 403 | 正确拒绝写入 |
 | restore | 204 | 恢复 active，默认 Version 保留 |
 | public Git advertisement | 200 | public upload-pack discovery 可用 |
-| `/api/v1/auth/register` | 404 | 用户注册未实现 |
-| `/api/v1/users` | 404 | 管理员用户管理未实现 |
+| Public registration capability 与注册 | 200/201 | 配置开启后创建普通用户并自动进入管理界面 |
+| 管理员用户管理 | 成功 | 创建用户、授予/撤销 system-admin，导航权限即时同步 |
+| Team 管理 | 成功 | 创建 Team、发出 7 天邀请、目标用户站内接受并成为 viewer |
+| Plugin 项目 UI | 成功 | 创建/列表/详情、clone URL、分支/tag 选择、目录树与 UTF-8 blob 预览 |
+| Plugin commit history | 成功 | 浏览器显示真实 Git commit 与 SHA |
+| Plugin Version UI | 201 | 发布 `v1.0.0` 并设为默认版本 |
+| Plugin settings UI | 204 | private→public、archive、restore 均同步刷新 |
 
 SQLite 只证明单进程开发/测试行为，不证明 PostgreSQL 生产约束与并发行为。
 
@@ -231,9 +236,13 @@ receive coordinator 在专用 PostgreSQL session 上持有 session-level advisor
 
 若产品要求用户可见 optimistic concurrency，应在单独 contract 变更中增加 expected SHA；若只要求发布调用时的服务端 authority，当前模型合理。本轮不擅自扩展 wire。
 
-### 5. 用户与 namespace 管理不在本 slice
+### 5. User/Team 与项目管理联合验收已闭合
 
-当前没有用户注册、管理员用户 CRUD/list 或任意 namespace 创建 API，因此普通用户 ownership 和管理员跨用户流程无法通过受支持 API 做端到端验证。它们属于未来 identity/administration slice，不是 Plugin lifecycle 内部缺陷。
+后续 User/Team lifecycle 与管理前端已交付。使用 Chrome DevTools MCP 在全新 SQLite 状态中模拟真实用户完成：公开注册、登录、管理员创建用户及 system-admin 授予/撤销、Team 创建与邀请接受、个人 Plugin 创建、PAT 创建、真实 Git push、仓库树/文本预览/commit history、Version 发布/default、visibility、archive/restore。
+
+浏览器验收发现登录与注册后 App shell 未立即刷新 profile，曾导致管理员导航缺失或沿用旧 profile；现由 App 统一接管认证后路由/profile 加载，并增加回归测试。嵌入 token 页面不再重复显示 logout。仓库 revision selector 已补充稳定 `id`，消除表单可访问性告警。
+
+网络检查中业务请求均返回预期 2xx；目录探测先请求 blob 得到 409、再读取 tree 得到 200，是当前浏览器的类型判定流程，不是失败状态。控制台只剩静态 favicon 404，不影响 API 与状态一致性。
 
 ## 验证命令
 
@@ -260,9 +269,8 @@ go build ./...
 未执行/不适用覆盖：
 
 - PostgreSQL integration：未提供 `MARKETPLACE_TEST_POSTGRES_DSN`；
-- frontend 浏览器/UI：本轮未修改 frontend，运行调试时禁用；
 - SSH Git：当前未实现；
-- 普通用户与管理员跨用户：缺少相应 identity 管理 API。
+- 浏览器验证使用 SQLite 与测试 validator shim；生产 `claude plugin validate --strict` 行为由 Git 模块测试和既有真实 validator 审计覆盖。当前本机 Claude CLI 版本不接受 `--strict`，该运行时兼容性仍应由 startup capability probe 提前暴露。
 
 ## 复现流程摘要
 
