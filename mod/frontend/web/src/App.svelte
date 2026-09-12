@@ -18,6 +18,7 @@
   export let apiClient: ApiClient = createApiClient({ getSession: loadSession, clearSession });
   let route: Route = { name: 'login' };
   let profile: UserProfile | null = null;
+  let routeSearch = '';
   let profileController: AbortController | undefined;
   let router = useRouter((next) => {
     if (!['login', 'register', 'not-found'].includes(next.name) && !loadSession()) {
@@ -26,6 +27,7 @@
       return;
     }
     route = next;
+    routeSearch = window.location.search;
     if (loadSession() && !profile) loadProfile();
   });
   async function loadProfile() {
@@ -47,22 +49,22 @@
         <div class="nav-links"><a data-route href="/plugins">Plugins</a><a data-route href="/teams">Teams</a><a data-route href="/tokens">Tokens</a><span class="header-user">{profile?.username || loadSession()?.username}</span><button class="secondary" onclick={logout}>Log out</button></div>
       </nav>
     </header>
-    <div class="app-frame">
-      <nav class="side-nav" aria-label="Management sections">
+    <div class="app-frame" class:plugin-frame={['plugins', 'plugin-new', 'plugin'].includes(route.name)}>
+      {#if !['plugins', 'plugin-new', 'plugin'].includes(route.name)}<nav class="side-nav" aria-label="Management sections">
         <p class="side-nav-heading">Workspace</p>
         <a data-route href="/plugins" aria-current={activeSection === 'plugins' ? 'page' : undefined}>Plugins</a>
         <a data-route href="/teams" aria-current={activeSection === 'teams' ? 'page' : undefined}>Teams</a>
         <a data-route href="/invitations" aria-current={activeSection === 'invitations' ? 'page' : undefined}>Invitations</a>
         <a data-route href="/tokens" aria-current={activeSection === 'tokens' ? 'page' : undefined}>Access tokens</a>
         {#if profile?.systemAdmin}<p class="side-nav-heading">Administration</p><a data-route href="/admin/users" aria-current={activeSection === 'admin-users' ? 'page' : undefined}>Users</a>{/if}
-      </nav>
+      </nav>{/if}
       <div class="app-content">
         {#if route.name === 'tokens'}
           <IdentityPage {apiClient} onAuthenticated={authenticated} showLogout={false} />
-        {:else if route.name === 'plugins'}
-          <PluginsPage {apiClient} profile={profile} />
+        {:else if route.name === 'plugins' || route.name === 'plugin-new'}
+          {#key `${route.name}/${profile?.username || ''}`}<PluginsPage {apiClient} {profile} creating={route.name === 'plugin-new'} />{/key}
         {:else if route.name === 'plugin'}
-          {#key `${route.namespace}/${route.plugin}/${route.tab}/${route.path}`}
+          {#key `${route.namespace}/${route.plugin}/${route.tab}/${route.path}/${routeSearch}`}
             <PluginPage {apiClient} namespace={route.namespace} plugin={route.plugin} tab={route.tab} path={route.path} />
           {/key}
         {:else if route.name === 'teams'}

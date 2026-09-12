@@ -3,7 +3,7 @@ import { onMount } from 'svelte';
 export type PluginTab = 'code' | 'commits' | 'versions' | 'settings';
 
 export type Route =
-  | { name: 'login' | 'register' | 'tokens' | 'plugins' | 'teams' | 'invitations' | 'admin-users' | 'not-found' }
+  | { name: 'login' | 'register' | 'tokens' | 'plugins' | 'plugin-new' | 'teams' | 'invitations' | 'admin-users' | 'not-found' }
   | { name: 'plugin'; namespace: string; plugin: string; tab: PluginTab; path: string }
   | { name: 'team'; slug: string };
 
@@ -20,6 +20,7 @@ export function routeFor(pathname: string): Route {
   if (pathname === '/register') return { name: 'register' };
   if (pathname === '/tokens') return { name: 'tokens' };
   if (pathname === '/plugins') return { name: 'plugins' };
+  if (pathname === '/plugins/new') return { name: 'plugin-new' };
   if (pathname === '/teams') return { name: 'teams' };
   if (pathname === '/invitations') return { name: 'invitations' };
   if (pathname === '/admin/users') return { name: 'admin-users' };

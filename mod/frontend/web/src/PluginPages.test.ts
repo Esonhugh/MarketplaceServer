@@ -47,12 +47,54 @@ afterEach(() => {
 });
 
 describe('Plugin pages', () => {
-  it('lists a personal namespace and creates a Plugin with the selected visibility', async () => {
+  it('lists projects without a permanent creation form', async () => {
+    render(PluginsPage, { props: { apiClient: client() as ApiClient, profile: { username: 'alice' } } });
+    expect(await screen.findByText('alice / example-plugin')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Plugin name')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'New Plugin' })).toHaveAttribute('href', '/plugins/new');
+  });
+
+  it('opens the dedicated creation route without the workspace sidebar', async () => {
+    saveSession({ username: 'alice', token: 'jwt-token' });
+    window.history.replaceState({}, '', '/plugins/new');
+    render(App, { props: { apiClient: client({ me: vi.fn().mockResolvedValue({ username: 'alice' }) }) as ApiClient } });
+    expect(await screen.findByLabelText('Plugin name')).toBeInTheDocument();
+    expect(screen.queryByRole('navigation', { name: 'Management sections' })).not.toBeInTheDocument();
+  });
+
+  it('shows real latest commit, a file table and About', async () => {
+    const apiClient = client({
+      listRepositoryRefs: vi.fn().mockResolvedValue({ branches: [{ name: 'main' }], tags: [], defaultRef: 'main' }),
+      getRepositoryTree: vi.fn().mockResolvedValue({ entries: [{ name: 'README.md', type: 'blob', size: 24 }] }),
+      listRepositoryCommits: vi.fn().mockResolvedValue({ items: [{ subject: 'Document installation', authorName: 'Alice', committedAt: '2026-08-01T00:00:00Z', sha: 'abcdef1234567890' }] }),
+    });
+    render(PluginPage, { props: { apiClient: apiClient as ApiClient, namespace: 'alice', plugin: 'example-plugin' } });
+    expect(await screen.findByText('Document installation')).toBeInTheDocument();
+    expect(screen.getByRole('table', { name: 'Repository files' })).toBeInTheDocument();
+    expect(screen.queryByText('null B')).not.toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: 'About' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'README.md' })).toHaveAttribute('href', '/plugins/alice/example-plugin/code/README.md?ref=main');
+    expect(screen.getAllByRole('link', { name: 'example-plugin' })[0]).toHaveAttribute('href', '/plugins/alice/example-plugin/code?ref=main');
+  });
+
+  it('renders escaped source with line anchors and parent breadcrumbs', async () => {
+    const apiClient = client({
+      listRepositoryRefs: vi.fn().mockResolvedValue({ branches: [{ name: 'main' }], tags: [], defaultRef: 'main' }),
+      getRepositoryBlob: vi.fn().mockResolvedValue({ path: 'src/index.ts', size: 32, content: '<script>unsafe</script>\nsecond line' }),
+      listRepositoryCommits: vi.fn().mockResolvedValue({ items: [] }),
+    });
+    render(PluginPage, { props: { apiClient: apiClient as ApiClient, namespace: 'alice', plugin: 'example-plugin', path: 'src/index.ts' } });
+    expect(await screen.findByText('<script>unsafe</script>')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Line 2' })).toHaveAttribute('href', '#L2');
+    expect(screen.getByRole('navigation', { name: 'File path' })).toHaveTextContent('src');
+  });
+
+  it('creates a Plugin with the selected visibility on the creation page', async () => {
     const apiClient = client();
     const user = userEvent.setup();
-    render(PluginsPage, { props: { apiClient: apiClient as ApiClient, profile: { username: 'alice' } } });
+    render(PluginsPage, { props: { apiClient: apiClient as ApiClient, profile: { username: 'alice' }, creating: true } });
 
-    expect(await screen.findByText('alice / example-plugin')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create Plugin' })).toBeEnabled());
     await user.type(screen.getByLabelText('Plugin name'), 'new-plugin');
     await user.selectOptions(screen.getByLabelText('Visibility'), 'private');
     await user.click(screen.getByRole('button', { name: 'Create Plugin' }));
@@ -61,7 +103,53 @@ describe('Plugin pages', () => {
       'alice',
       { name: 'new-plugin', visibility: 'private' },
     ));
-    expect(apiClient.listPlugins).toHaveBeenLastCalledWith('alice', 1, 100, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(apiClient.listPlugins).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe('/plugins/alice/example-plugin/code');
+  });
+
+  it('keeps a selected ref through file navigation and browser back', async () => {
+    saveSession({ username: 'alice', token: 'jwt-token' });
+    window.history.replaceState({}, '', '/plugins/alice/example-plugin/code?ref=feature%2Fui');
+    const apiClient = client({
+      me: vi.fn().mockResolvedValue({ username: 'alice' }),
+      listRepositoryRefs: vi.fn().mockResolvedValue({ branches: [{ name: 'main' }, { name: 'feature/ui' }], tags: [], defaultRef: 'main' }),
+      getRepositoryTree: vi.fn().mockResolvedValue({ entries: [{ name: 'README.md', type: 'blob' }] }),
+      getRepositoryBlob: vi.fn().mockResolvedValue({ path: 'README.md', content: 'Feature source', size: 14 }),
+      listRepositoryCommits: vi.fn().mockResolvedValue({ items: [] }),
+    });
+    const user = userEvent.setup();
+    render(App, { props: { apiClient: apiClient as ApiClient } });
+    await user.click(await screen.findByRole('link', { name: 'README.md' }));
+    expect(await screen.findByText('Feature source')).toBeInTheDocument();
+    expect(apiClient.getRepositoryBlob).toHaveBeenCalledWith('alice', 'example-plugin', 'feature/ui', 'README.md', expect.anything());
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Branch or tag' }), 'main');
+    expect(await screen.findByRole('table', { name: 'Repository files' })).toBeInTheDocument();
+    expect(apiClient.getRepositoryTree).toHaveBeenLastCalledWith('alice', 'example-plugin', 'main', '', expect.anything());
+    window.history.back();
+    expect(await screen.findByText('Feature source')).toBeInTheDocument();
+  });
+
+  it('keeps source available when commit history fails', async () => {
+    const apiClient = client({
+      listRepositoryRefs: vi.fn().mockResolvedValue({ branches: [{ name: 'main' }], tags: [], defaultRef: 'main' }),
+      getRepositoryTree: vi.fn().mockResolvedValue({ entries: [{ name: 'README.md', type: 'blob' }] }),
+      listRepositoryCommits: vi.fn().mockRejectedValue({ status: 503, message: 'Unavailable' }),
+    });
+    render(PluginPage, { props: { apiClient: apiClient as ApiClient, namespace: 'alice', plugin: 'example-plugin' } });
+    expect(await screen.findByText('Recent commit unavailable.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'README.md' })).toBeInTheDocument();
+  });
+
+  it('retains creation fields and reports a denied request', async () => {
+    const apiClient = client({ createPlugin: vi.fn().mockRejectedValue({ status: 403, message: 'Access denied' }) });
+    const user = userEvent.setup();
+    render(PluginsPage, { props: { apiClient: apiClient as ApiClient, profile: { username: 'alice' }, creating: true } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create Plugin' })).toBeEnabled());
+    await user.type(screen.getByLabelText('Plugin name'), 'new-plugin');
+    await user.click(screen.getByRole('button', { name: 'Create Plugin' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Access denied');
+    expect(screen.getByLabelText('Plugin name')).toHaveValue('new-plugin');
+    expect(window.location.pathname).toBe('/');
   });
 
   it('loads Plugin detail and publishes or selects canonical versions', async () => {

@@ -47,7 +47,7 @@
 | Team lifecycle 与角色矩阵 | 已实现 | Team namespace、固定五角色、member/invitation lifecycle 及对 Plugin/Git policy 的即时授权；没有 append-only audit query API | `mod/backend/domain/identity/service/team_service.go`, `mod/backend/domain/authorization/` |
 | SSH Git | 规划中 | 当前没有 SSH listener、公钥认证或 transport wiring | `roadmap.md` |
 | Identity 管理前端 | 已实现 | login/session、registration、当前用户/PAT、管理员用户以及 Team/invitation management UI；静态嵌入和 SPA boundary 保持不变 | `mod/frontend/web/src/`, `mod/frontend/` |
-| Plugin 管理前端 | 已实现 | namespace-scoped create/list、项目详情、版本/default、visibility、archive/restore，以及 branch/tag tree、UTF-8 text blob 和 path commit history 浏览 | `mod/frontend/web/src/{PluginsPage,PluginPage}.svelte` |
+| Plugin 管理前端 | 已实现 | namespace-scoped list 与独立 `/plugins/new` 创建页；仓库式 owner/Plugin 标题、Code/Versions/Settings tabs、Code 文件表格与 About、真实最近提交、Clone 菜单；branch/tag 选择通过 `ref` query 保留，UTF-8 text blob 含行号与路径面包屑；保留版本/default、visibility、archive/restore 和 path commit history 浏览 | `mod/frontend/web/src/{PluginsPage,PluginPage}.svelte` |
 | 完整管理前端 | 规划中 | first-run setup、通用 namespace、Marketplace、credential、audit 等管理页面尚未交付 | `roadmap.md` |
 
 ## 当前 backend 领域
