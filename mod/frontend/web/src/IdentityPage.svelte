@@ -333,16 +333,19 @@
 
 {#if !session}
   <section class="auth-page">
-    <h1>Sign in</h1>
-    <p class="muted">Use your MarketplaceServer account.</p>
-    <form class="panel form-stack" onsubmit={login}>
-      <label for="username">Username</label>
+    <header class="auth-header">
+      <p class="auth-brand">MarketplaceServer</p>
+      <h1>Sign in</h1>
+      <p class="muted">Use your MarketplaceServer account.</p>
+    </header>
+    <form class="panel form-stack auth-form" onsubmit={login}>
+      <label class="auth-label" for="username">Username</label>
       <input class="field" id="username" name="username" autocomplete="username" required bind:value={username} />
-      <label for="password">Password</label>
+      <label class="auth-label" for="password">Password</label>
       <input class="field" id="password" name="password" type="password" autocomplete="current-password" required bind:value={password} />
       {#if loginError}<p class="error" role="alert">{errorText(loginError)}</p>{/if}
       <button class="primary" type="submit" disabled={loginPending} aria-busy={loginPending}>{loginPending ? 'Signing in…' : 'Sign in'}</button>
-      <a data-route href="/register">Create an account</a>
+      <footer class="auth-footer"><a data-route href="/register">Create an account</a></footer>
     </form>
   </section>
 {:else}

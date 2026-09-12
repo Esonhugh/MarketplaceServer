@@ -39,6 +39,30 @@ afterEach(() => {
 });
 
 describe('identity console', () => {
+  it('uses a centered authentication shell with left-aligned form labels', () => {
+    window.history.replaceState({}, '', '/login');
+    render(App, { props: { apiClient: api() } });
+
+    const heading = screen.getByRole('heading', { name: 'Sign in' });
+    const form = screen.getByRole('button', { name: 'Sign in' }).closest('form');
+    expect(heading.closest('header')).toHaveClass('auth-header');
+    expect(form).toHaveClass('auth-form');
+    expect(form?.querySelector('label')).toHaveClass('auth-label');
+    expect(screen.getByRole('link', { name: 'Create an account' }).closest('footer')).toHaveClass('auth-footer');
+  });
+
+  it('uses the same authentication shell for registration', async () => {
+    window.history.replaceState({}, '', '/register');
+    render(App, { props: { apiClient: api({ capabilities: vi.fn().mockResolvedValue({ registrationEnabled: true }) }) } });
+
+    const heading = await screen.findByRole('heading', { name: 'Create account' });
+    const form = (await screen.findByRole('button', { name: 'Create account' })).closest('form');
+    expect(heading.closest('header')).toHaveClass('auth-header');
+    expect(form).toHaveClass('auth-form');
+    expect(form?.querySelectorAll('.auth-label')).toHaveLength(4);
+    expect(screen.getByRole('link', { name: 'Already have an account?' }).closest('footer')).toHaveClass('auth-footer');
+  });
+
   it('loads the registered user profile immediately after signup', async () => {
     window.history.replaceState({}, '', '/register');
     const user = userEvent.setup();

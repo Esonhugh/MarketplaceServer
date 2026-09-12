@@ -84,11 +84,24 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .side-nav-heading { margin: .8rem .6rem .3rem; color: var(--muted); font-size: .75rem; font-weight: 600; text-transform: uppercase; }
 .app-content { min-width: 0; }
 
-.auth-page { width: min(23rem, calc(100% - 2rem)); min-height: 100vh; margin: auto; padding: 4rem 0; }
-.auth-page::before { content: 'MarketplaceServer'; display: block; margin-bottom: 1.5rem; text-align: center; color: var(--fg); font-size: 1.25rem; font-weight: 600; }
-.auth-page .panel { padding: 1.5rem; box-shadow: var(--shadow); }
-.auth-page h1 { margin: 0 0 .25rem; font-size: 1.5rem; text-align: center; }
-.auth-page .muted { text-align: center; }
+.auth-page { width: min(21.25rem, calc(100% - 2rem)); min-height: 100vh; margin: 0 auto; padding: 3rem 0; }
+.auth-header { display: grid; justify-items: center; gap: .35rem; margin-bottom: 1rem; text-align: center; }
+.auth-brand { margin: 0 0 1.25rem; color: var(--fg); font-size: 1.25rem; font-weight: 600; }
+.auth-page h1 { margin: 0; font-size: 1.5rem; font-weight: 400; }
+.auth-header .muted { margin: 0; }
+.auth-page .panel { padding: 1rem; box-shadow: var(--shadow); }
+.auth-form { gap: .5rem; margin-top: 0; }
+.auth-label { margin-top: .25rem; font-weight: 600; text-align: left; }
+.auth-form .field { min-height: 2.5rem; }
+.auth-form .primary { width: 100%; min-height: 2.25rem; margin-top: .5rem; }
+.auth-footer { margin: 1rem -1rem -1rem; padding: 1rem; border-top: 1px solid var(--border-muted); text-align: center; }
+.auth-state { margin-top: 0; text-align: center; }
+.auth-state > :first-child { margin-top: 0; }
+.auth-state > :last-child { margin-bottom: 0; }
+
+@media (max-width: 390px) {
+  .auth-page { width: min(21.25rem, calc(100% - 2rem)); padding-top: 2rem; }
+}
 
 .page { width: 100%; display: grid; gap: 1.25rem; }
 .page-header { min-height: 4rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border-muted); display: flex; align-items: end; justify-content: space-between; gap: 1rem; }

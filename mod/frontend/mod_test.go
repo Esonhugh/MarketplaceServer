@@ -83,6 +83,16 @@ func TestDisabledDoesNotInstallSPAFallback(t *testing.T) {
 	}
 }
 
+func TestEmbeddedIndexDeclaresFavicon(t *testing.T) {
+	index, err := fs.ReadFile(embeddedDist, "dist/index.html")
+	if err != nil {
+		t.Fatalf("read embedded index: %v", err)
+	}
+	if !regexp.MustCompile(`<link[^>]+rel=["']icon["'][^>]+href=["']data:image/svg\+xml,`).Match(index) {
+		t.Fatal("embedded index does not declare an inline favicon")
+	}
+}
+
 func TestEmbeddedIndexReferencesExistingAssets(t *testing.T) {
 	index, err := fs.ReadFile(embeddedDist, "dist/index.html")
 	if err != nil {
@@ -96,7 +106,7 @@ func TestEmbeddedIndexReferencesExistingAssets(t *testing.T) {
 	}
 	for _, match := range matches {
 		name := strings.TrimPrefix(string(match[1]), "./")
-		if strings.HasPrefix(name, "http://") || strings.HasPrefix(name, "https://") || strings.HasPrefix(name, "//") {
+		if strings.HasPrefix(name, "http://") || strings.HasPrefix(name, "https://") || strings.HasPrefix(name, "//") || strings.HasPrefix(name, "data:") {
 			continue
 		}
 		if _, err := fs.Stat(embeddedDist, "dist/"+name); err != nil {
