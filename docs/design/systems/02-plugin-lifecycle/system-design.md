@@ -80,7 +80,7 @@ Publish may set default with `makeDefault`. Owners may explicitly set or clear i
 
 `main`, ordinary branches and noncanonical tags are ordinary development refs: no Plugin validator and no lifecycle effect.
 
-Canonical tag create/move strict-validates with warnings and errors rejected, exact case-sensitive manifest name matching, and annotated-tag peeling to a full commit. Candidate tags do not publish. Management publish repeats strict validation and CAS-binds the current full SHA.
+Canonical tag create/move validates with native MarketplaceServer Plugin Profile v1 (specified in [Git contract](git/api-contract.md#marketplaceserver-plugin-profile-v1--normative-source-validation)), exact case-sensitive manifest name matching, and annotated-tag peeling to a full commit. Candidate tags do not publish. Management publish repeats strict validation and CAS-binds the current full SHA.
 
 Available tag moves prebuild every Marketplace revision selecting Plugin+tag. Available tag deletion is blocked by any active Marketplace revision reference. Historical-only references allow deletion: Version becomes deleted, default clears, historical Plugin distribution returns `410`, index remains readable and bytes enter async GC. Candidate deletion is directly allowed and creates no tombstone.
 

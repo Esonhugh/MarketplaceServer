@@ -4,11 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -34,8 +32,7 @@ func TestPluginSourceInspectorAllowsCanonicalLightweightAndAnnotatedTags(t *test
 }
 `,
 			})
-			validator := newPluginSourceValidator(t, "plugin validation passed", 0)
-			inspector, err := NewPluginSourceInspector(fixture.service, validator.path)
+			inspector, err := NewPluginSourceInspector(fixture.service)
 			if err != nil {
 				t.Fatalf("NewPluginSourceInspector() error = %v", err)
 			}
@@ -61,20 +58,64 @@ func TestPluginSourceInspectorAllowsCanonicalLightweightAndAnnotatedTags(t *test
 				t.Fatalf("manifest digest = %q, want %q", got, want)
 			}
 
-			invocation := validator.invocation(t)
-			if got, want := strings.Join(invocation.args, "\x00"), "plugin\x00validate\x00"+invocation.directory+"\x00--strict"; got != want {
-				t.Fatalf("validator arguments = %#v, want claude plugin validate <dir> --strict", invocation.args)
-			}
-			if !strings.HasPrefix(filepath.Base(filepath.Dir(invocation.directory)), "marketplace-plugin-source-") {
-				t.Fatalf("validator directory = %q, want isolated materialized directory", invocation.directory)
-			}
-			if _, err := os.Stat(invocation.directory); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("validator materialization directory remains after inspection: %v", err)
-			}
-			if invocation.gitConfigNoSystem != "1" || invocation.gitTerminalPrompt != "0" {
-				t.Fatalf("validator environment = %#v, want minimal Git environment", invocation)
-			}
 		})
+	}
+}
+
+func TestPluginSourceInspectorReadsObjectsFromReceiveQuarantineOnly(t *testing.T) {
+	fixture := newPluginSourceFixture(t, pluginSourceFixtureOptions{
+		manifest: `{"name":"plugin-one","description":"fixture"}`,
+	})
+	if err := os.WriteFile(filepath.Join(fixture.worktree, "quarantine-only.txt"), []byte("new object\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pluginSourceGit(t, fixture.gitBinary, fixture.worktree, "add", ".")
+	pluginSourceGit(t, fixture.gitBinary, fixture.worktree, "commit", "-m", "quarantine candidate")
+	commitObjectID := strings.TrimSpace(pluginSourceGitOutput(t, fixture.gitBinary, fixture.worktree, "rev-parse", "HEAD"))
+
+	repositoryPath, err := fixture.service.existingRepositoryPath(pluginSourceRepositoryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects := repositoryReceiveObjects{gitBinary: fixture.gitBinary, repositoryPath: repositoryPath}
+	if _, err := objects.PeelCommit(context.Background(), commitObjectID); err == nil {
+		t.Fatal("PeelCommit() found an unreceived object without the receive object environment")
+	}
+	inspector := &pluginSourceInspector{service: fixture.service}
+	if _, err := inspector.inspectCommit(context.Background(), repositoryPath, commitObjectID, commitObjectID, "plugin-one", pluginSourceGitEnv()); err == nil {
+		t.Fatal("inspectCommit() found an unreceived object without the receive object environment")
+	}
+
+	environment := receiveObjectEnvironment{
+		ObjectDirectory:            filepath.Join(fixture.worktree, ".git", "objects"),
+		AlternateObjectDirectories: filepath.Join(repositoryPath, "objects"),
+		QuarantinePath:             filepath.Join(fixture.worktree, ".git", "objects"),
+	}
+	objects.environment = environment
+	peeled, err := objects.PeelCommit(context.Background(), commitObjectID)
+	if err != nil {
+		t.Fatalf("PeelCommit() in quarantine error = %v", err)
+	}
+	if peeled != commitObjectID {
+		t.Fatalf("PeelCommit() = %q, want %q", peeled, commitObjectID)
+	}
+	inspection, err := inspector.inspectCommit(context.Background(), repositoryPath, commitObjectID, peeled, "plugin-one", environment.gitEnvironment())
+	if err != nil {
+		t.Fatalf("inspectCommit() in quarantine error = %v", err)
+	}
+	if inspection.CommitObjectID != commitObjectID {
+		t.Fatalf("inspectCommit() commit = %q, want %q", inspection.CommitObjectID, commitObjectID)
+	}
+}
+
+func TestPluginSourceGitEnvironmentDoesNotInheritReceiveObjectVariables(t *testing.T) {
+	for _, name := range []string{"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_QUARANTINE_PATH"} {
+		t.Setenv(name, "/untrusted/global/value")
+	}
+	for _, entry := range pluginSourceGitEnv() {
+		if strings.HasPrefix(entry, "GIT_OBJECT_DIRECTORY=") || strings.HasPrefix(entry, "GIT_ALTERNATE_OBJECT_DIRECTORIES=") || strings.HasPrefix(entry, "GIT_QUARANTINE_PATH=") {
+			t.Fatalf("clean plugin environment inherited receive variable %q", entry)
+		}
 	}
 }
 
@@ -87,8 +128,7 @@ func TestPluginSourceInspectorSupportsSHA256Repositories(t *testing.T) {
 	if len(fixture.rawTagObjectID) != 64 || len(fixture.commitObjectID) != 64 {
 		t.Fatalf("SHA-256 fixture object IDs = %q / %q, want 64 hex characters", fixture.rawTagObjectID, fixture.commitObjectID)
 	}
-	validator := newPluginSourceValidator(t, "plugin validation passed", 0)
-	inspector, err := NewPluginSourceInspector(fixture.service, validator.path)
+	inspector, err := NewPluginSourceInspector(fixture.service)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,10 +142,9 @@ func TestPluginSourceInspectorSupportsSHA256Repositories(t *testing.T) {
 	}
 }
 
-func TestPluginSourceInspectorRejectsInvalidInputsBeforeRunningValidator(t *testing.T) {
+func TestPluginSourceInspectorRejectsInvalidInputs(t *testing.T) {
 	fixture := newPluginSourceFixture(t, pluginSourceFixtureOptions{manifest: `{"name":"plugin-one"}`})
-	validator := newPluginSourceValidator(t, "plugin validation passed", 0)
-	inspector, err := NewPluginSourceInspector(fixture.service, validator.path)
+	inspector, err := NewPluginSourceInspector(fixture.service)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,24 +167,17 @@ func TestPluginSourceInspectorRejectsInvalidInputsBeforeRunningValidator(t *test
 			}
 		})
 	}
-	if invocation := validator.tryInvocation(t); invocation != nil {
-		t.Fatalf("invalid source request ran validator: %#v", invocation)
-	}
 }
 
 func TestPluginSourceInspectorRejectsMissingAndNonCommitTags(t *testing.T) {
 	t.Run("missing tag", func(t *testing.T) {
 		fixture := newPluginSourceFixture(t, pluginSourceFixtureOptions{manifest: `{"name":"plugin-one"}`})
-		validator := newPluginSourceValidator(t, "plugin validation passed", 0)
-		inspector, err := NewPluginSourceInspector(fixture.service, validator.path)
+		inspector, err := NewPluginSourceInspector(fixture.service)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if _, err := inspector.InspectPluginSource(context.Background(), pluginSourceRepositoryID, "v2.0.0", "plugin-one"); err == nil {
 			t.Fatal("InspectPluginSource() succeeded for a missing tag; want error")
-		}
-		if invocation := validator.tryInvocation(t); invocation != nil {
-			t.Fatalf("missing tag ran validator: %#v", invocation)
 		}
 	})
 
@@ -157,52 +189,14 @@ func TestPluginSourceInspectorRejectsMissingAndNonCommitTags(t *testing.T) {
 		}
 		pluginSourceGit(t, fixture.gitBinary, fixture.worktree, "tag", "v2.0.0", blobID)
 		pluginSourceGit(t, fixture.gitBinary, fixture.worktree, "push", "origin", "refs/tags/v2.0.0")
-
-		validator := newPluginSourceValidator(t, "plugin validation passed", 0)
-		inspector, err := NewPluginSourceInspector(fixture.service, validator.path)
+		inspector, err := NewPluginSourceInspector(fixture.service)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if _, err := inspector.InspectPluginSource(context.Background(), pluginSourceRepositoryID, "v2.0.0", "plugin-one"); err == nil {
 			t.Fatal("InspectPluginSource() succeeded for a tag pointing to a blob; want error")
 		}
-		if invocation := validator.tryInvocation(t); invocation != nil {
-			t.Fatalf("non-commit tag ran validator: %#v", invocation)
-		}
 	})
-}
-
-func TestPluginSourceInspectorRejectsValidatorWarningsErrorsAndNonzeroWithoutLeakingOutput(t *testing.T) {
-	for _, outcome := range []struct {
-		name   string
-		output string
-		exit   int
-	}{
-		{name: "warning", output: "warning: source /private/validator-output", exit: 0},
-		{name: "error", output: "error: source /private/validator-output", exit: 0},
-		{name: "nonzero", output: "untrusted validator output /private/validator-output", exit: 17},
-	} {
-		t.Run(outcome.name, func(t *testing.T) {
-			fixture := newPluginSourceFixture(t, pluginSourceFixtureOptions{manifest: `{"name":"plugin-one"}`})
-			validator := newPluginSourceValidator(t, outcome.output, outcome.exit)
-			inspector, err := NewPluginSourceInspector(fixture.service, validator.path)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			_, err = inspector.InspectPluginSource(context.Background(), pluginSourceRepositoryID, "v1.2.3", "plugin-one")
-			if err == nil {
-				t.Fatal("InspectPluginSource() succeeded; want validator rejection")
-			}
-			if got := err.Error(); strings.Contains(got, "/private/validator-output") || strings.Contains(got, "warning:") || strings.Contains(got, "error:") {
-				t.Fatalf("validator output leaked through error: %q", got)
-			}
-			invocation := validator.invocation(t)
-			if _, statErr := os.Stat(invocation.directory); !errors.Is(statErr, os.ErrNotExist) {
-				t.Fatalf("validator materialization directory remains after rejection: %v", statErr)
-			}
-		})
-	}
 }
 
 func TestPluginSourceInspectorRejectsInvalidAndMismatchedManifest(t *testing.T) {
@@ -214,11 +208,11 @@ func TestPluginSourceInspectorRejectsInvalidAndMismatchedManifest(t *testing.T) 
 		{name: "malformed", contents: pluginSourceString(`{"name":`)},
 		{name: "missing name", contents: pluginSourceString(`{"description":"fixture"}`)},
 		{name: "wrong case", contents: pluginSourceString(`{"name":"Plugin-One"}`)},
+		{name: "unknown field", contents: pluginSourceString(`{"name":"plugin-one","unexpected":true}`)},
 	} {
 		t.Run(manifest.name, func(t *testing.T) {
 			fixture := newPluginSourceFixture(t, pluginSourceFixtureOptions{manifestPointer: manifest.contents})
-			validator := newPluginSourceValidator(t, "plugin validation passed", 0)
-			inspector, err := NewPluginSourceInspector(fixture.service, validator.path)
+			inspector, err := NewPluginSourceInspector(fixture.service)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -234,6 +228,8 @@ type pluginSourceFixtureOptions struct {
 	objectFormat    string
 	manifest        string
 	manifestPointer *string
+	files           map[string]string
+	symlinks        map[string]string
 }
 
 type pluginSourceFixture struct {
@@ -292,6 +288,24 @@ func newPluginSourceFixture(t *testing.T, options pluginSourceFixtureOptions) pl
 			t.Fatal(err)
 		}
 	}
+	for name, contents := range options.files {
+		path := filepath.Join(worktree, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, target := range options.symlinks {
+		path := filepath.Join(worktree, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, path); err != nil {
+			t.Fatal(err)
+		}
+	}
 	pluginSourceGit(t, gitBinary, worktree, "add", ".")
 	pluginSourceGit(t, gitBinary, worktree, "commit", "-m", "fixture")
 	commitObjectID := strings.TrimSpace(pluginSourceGitOutput(t, gitBinary, worktree, "rev-parse", "HEAD"))
@@ -311,74 +325,6 @@ func newPluginSourceFixture(t *testing.T, options pluginSourceFixtureOptions) pl
 		rawTagObjectID: rawTagObjectID,
 		commitObjectID: commitObjectID,
 	}
-}
-
-type pluginSourceValidator struct {
-	path string
-	log  string
-}
-
-type pluginSourceValidatorInvocation struct {
-	args              []string
-	directory         string
-	gitConfigNoSystem string
-	gitTerminalPrompt string
-}
-
-func newPluginSourceValidator(t *testing.T, output string, exitCode int) pluginSourceValidator {
-	t.Helper()
-	dir := t.TempDir()
-	logPath := filepath.Join(dir, "validator.log")
-	path := filepath.Join(dir, "fake-claude")
-	script := "#!/bin/sh\n" +
-		"set -eu\n" +
-		"log=" + pluginSourceShellQuote(logPath) + "\n" +
-		"printf 'ARG:%s\\n' \"$@\" > \"$log\"\n" +
-		"printf 'GIT_CONFIG_NOSYSTEM:%s\\n' \"${GIT_CONFIG_NOSYSTEM-}\" >> \"$log\"\n" +
-		"printf 'GIT_TERMINAL_PROMPT:%s\\n' \"${GIT_TERMINAL_PROMPT-}\" >> \"$log\"\n" +
-		"if [ \"$#\" -ne 4 ] || [ \"$1\" != plugin ] || [ \"$2\" != validate ] || [ \"$4\" != --strict ]; then exit 41; fi\n" +
-		"if [ ! -f \"$3/.claude-plugin/plugin.json\" ]; then exit 42; fi\n" +
-		"printf 'DIR:%s\\n' \"$3\" >> \"$log\"\n" +
-		"printf '%s\\n' " + pluginSourceShellQuote(output) + "\n" +
-		"exit " + strconv.Itoa(exitCode) + "\n"
-	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	return pluginSourceValidator{path: path, log: logPath}
-}
-
-func (v pluginSourceValidator) invocation(t *testing.T) pluginSourceValidatorInvocation {
-	t.Helper()
-	invocation := v.tryInvocation(t)
-	if invocation == nil {
-		t.Fatal("validator was not invoked")
-	}
-	return *invocation
-}
-
-func (v pluginSourceValidator) tryInvocation(t *testing.T) *pluginSourceValidatorInvocation {
-	t.Helper()
-	contents, err := os.ReadFile(v.log)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	invocation := &pluginSourceValidatorInvocation{}
-	for _, line := range strings.Split(strings.TrimSpace(string(contents)), "\n") {
-		switch {
-		case strings.HasPrefix(line, "ARG:"):
-			invocation.args = append(invocation.args, strings.TrimPrefix(line, "ARG:"))
-		case strings.HasPrefix(line, "DIR:"):
-			invocation.directory = strings.TrimPrefix(line, "DIR:")
-		case strings.HasPrefix(line, "GIT_CONFIG_NOSYSTEM:"):
-			invocation.gitConfigNoSystem = strings.TrimPrefix(line, "GIT_CONFIG_NOSYSTEM:")
-		case strings.HasPrefix(line, "GIT_TERMINAL_PROMPT:"):
-			invocation.gitTerminalPrompt = strings.TrimPrefix(line, "GIT_TERMINAL_PROMPT:")
-		}
-	}
-	return invocation
 }
 
 func requirePluginSourceGit(t *testing.T) string {
@@ -421,3 +367,131 @@ func pluginSourceString(value string) *string {
 }
 
 var _ gitservice.PluginSourceInspector = (*pluginSourceInspector)(nil)
+
+func TestPluginProfileRejectsMalformedSkill(t *testing.T) {
+	fixture := newPluginSourceFixture(t, pluginSourceFixtureOptions{manifest: `{"name":"plugin-one"}`, files: map[string]string{"skills/example/SKILL.md": "not frontmatter"}})
+	inspector, err := NewPluginSourceInspector(fixture.service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inspector.InspectPluginSource(context.Background(), pluginSourceRepositoryID, "v1.2.3", "plugin-one"); err == nil {
+		t.Fatal("malformed skill accepted")
+	}
+}
+
+func TestPluginSourceTreeOutputLimit(t *testing.T) {
+	writer := &pluginSourceTreeWriter{remaining: 4}
+	if n, err := writer.Write([]byte("1234")); n != 4 || err != nil {
+		t.Fatalf("at limit: %d %v", n, err)
+	}
+	if _, err := writer.Write([]byte("5")); err == nil || writer.Len() != 4 {
+		t.Fatal("tree output exceeded its memory budget")
+	}
+}
+
+func TestPluginProfileV1Fixtures(t *testing.T) {
+	const skill = "---\ndescription: Useful skill\n---\nInstructions.\n"
+	cases := []struct {
+		name, manifest  string
+		files, symlinks map[string]string
+		valid           bool
+	}{
+		{name: "minimal", valid: true},
+		{name: "json depth limit", manifest: `{"name":"plugin-one","metadata":{"x":` + strings.Repeat("[", 65) + "0" + strings.Repeat("]", 65) + `}}`},
+		{name: "frontmatter size limit", files: map[string]string{"skills/one/SKILL.md": "---\ndescription: " + strings.Repeat("x", 64<<10) + "\n---\n"}},
+		{name: "multiple skills", files: map[string]string{"skills/one/SKILL.md": skill, "skills/two/SKILL.md": "---\nname: second\ndescription: |\n  Second skill\nallowed-tools: [Read, Bash]\ndisable-model-invocation: true\nuser-invocable: false\ncontext: fork\nagent: Explore\nmodel: inherit\nargument-hint: '[file]'\nmetadata: {owner: team}\n---\nBody"}, valid: true},
+		{name: "custom skills", manifest: `{"name":"plugin-one","skills":["./extra"]}`, files: map[string]string{"extra/one/SKILL.md": skill}, valid: true},
+		{name: "string skills", manifest: `{"name":"plugin-one","skills":"./extra"}`, files: map[string]string{"extra/one/SKILL.md": skill}, valid: true},
+		{name: "all manifest fields", manifest: `{"name":"plugin-one","displayName":"Example","version":"1.2.3-beta.1+build.2","description":"Demo","author":{"name":"A","email":"a@example.invalid","url":"https://example.invalid"},"homepage":"https://example.invalid","repository":"https://example.invalid/repo","license":"MIT","keywords":["test"],"metadata":{"x":true},"defaultEnabled":true}`, valid: true},
+		{name: "wrong type", manifest: `{"name":"plugin-one","description":2}`},
+		{name: "null", manifest: `{"name":"plugin-one","description":null}`},
+		{name: "version", manifest: `{"name":"plugin-one","version":"1.2"}`},
+		{name: "version leading zero", manifest: `{"name":"plugin-one","version":"1.2.3-01"}`},
+		{name: "name mismatch", manifest: `{"name":"other"}`},
+		{name: "duplicate json", manifest: `{"name":"plugin-one","name":"plugin-one"}`},
+		{name: "nested duplicate json", manifest: `{"name":"plugin-one","metadata":{"items":[{"x":1,"x":2}]}}`},
+		{name: "case folded json", manifest: `{"Name":"plugin-one"}`},
+		{name: "json trailing", manifest: `{"name":"plugin-one"} {}`},
+		{name: "unknown author", manifest: `{"name":"plugin-one","author":{"secret":true}}`},
+		{name: "keywords type", manifest: `{"name":"plugin-one","keywords":[null]}`},
+		{name: "metadata type", manifest: `{"name":"plugin-one","metadata":[]}`},
+		{name: "manifest non utf8", manifest: "{\"name\":\"plugin-one\",\"description\":\"\xff\"}"},
+		{name: "skills type", manifest: `{"name":"plugin-one","skills":true}`},
+		{name: "skills null", manifest: `{"name":"plugin-one","skills":null}`},
+		{name: "path escape", manifest: `{"name":"plugin-one","skills":"./../outside"}`},
+		{name: "absolute path", manifest: `{"name":"plugin-one","skills":"/private/outside"}`},
+		{name: "missing directory", manifest: `{"name":"plugin-one","skills":"./missing"}`},
+		{name: "missing skill file", files: map[string]string{"skills/one/readme.txt": "text"}},
+		{name: "root skill", files: map[string]string{"SKILL.md": skill}},
+		{name: "single skills root", files: map[string]string{"skills/SKILL.md": skill}},
+		{name: "yaml malformed", files: map[string]string{"skills/one/SKILL.md": "---\ndescription: [\n---\n"}},
+		{name: "yaml sequence", files: map[string]string{"skills/one/SKILL.md": "---\n- description\n---\n"}},
+		{name: "yaml duplicate", files: map[string]string{"skills/one/SKILL.md": "---\ndescription: one\ndescription: two\n---\n"}},
+		{name: "yaml unknown", files: map[string]string{"skills/one/SKILL.md": "---\ndescription: useful\nunknown: true\n---\n"}},
+		{name: "yaml type", files: map[string]string{"skills/one/SKILL.md": "---\ndescription: 42\n---\n"}},
+		{name: "yaml hook unsupported", files: map[string]string{"skills/one/SKILL.md": "---\ndescription: useful\nhooks: {}\n---\n"}},
+		{name: "yaml alias", files: map[string]string{"skills/one/SKILL.md": "---\ndescription: &d useful\nname: *d\n---\n"}},
+		{name: "yaml merge", files: map[string]string{"skills/one/SKILL.md": "---\ndescription: useful\n<<: {name: one}\n---\n"}},
+		{name: "yaml metadata duplicate", files: map[string]string{"skills/one/SKILL.md": "---\ndescription: useful\nmetadata: {owner: one, owner: two}\n---\n"}},
+		{name: "yaml tools alias", files: map[string]string{"skills/one/SKILL.md": "---\ndescription: &d useful\nallowed-tools: [*d]\n---\n"}},
+		{name: "yaml document boundary", files: map[string]string{"skills/one/SKILL.md": "---\ndescription: useful\n...\nname: one\n---\n"}},
+		{name: "crlf", files: map[string]string{"skills/one/SKILL.md": strings.ReplaceAll(skill, "\n", "\r\n")}, valid: true},
+		{name: "nul body", files: map[string]string{"skills/one/SKILL.md": skill + "\x00"}},
+		{name: "bom boundary", files: map[string]string{"skills/one/SKILL.md": "\ufeff" + skill}},
+		{name: "delimiter whitespace", files: map[string]string{"skills/one/SKILL.md": "--- \ndescription: useful\n---\n"}},
+		{name: "missing description", files: map[string]string{"skills/one/SKILL.md": "---\nname: one\n---\n"}},
+		{name: "empty description", files: map[string]string{"skills/one/SKILL.md": "---\ndescription: ''\n---\n"}},
+		{name: "missing closing delimiter", files: map[string]string{"skills/one/SKILL.md": "---\ndescription: useful\n"}},
+		{name: "not first line", files: map[string]string{"skills/one/SKILL.md": "\n" + skill}},
+		{name: "non utf8 skill", files: map[string]string{"skills/one/SKILL.md": skill + "\xff"}},
+		{name: "invalid fallback", files: map[string]string{"skills/Bad_Name/SKILL.md": skill}},
+		{name: "duplicate name", files: map[string]string{"skills/one/SKILL.md": skill, "skills/two/SKILL.md": "---\nname: one\ndescription: useful\n---\n"}},
+		{name: "escaping symlink", symlinks: map[string]string{"escape": "../outside"}},
+		{name: "chained symlink escape", symlinks: map[string]string{"alias": ".", "escape": "alias/../outside"}},
+		{name: "safe auxiliary symlink", files: map[string]string{"resource.txt": "data"}, symlinks: map[string]string{"alias": "resource.txt"}, valid: true},
+		{name: "skill symlink", files: map[string]string{"source.md": skill}, symlinks: map[string]string{"skills/one/SKILL.md": "../../source.md"}},
+		{name: "directory symlink", files: map[string]string{"extra/one/SKILL.md": skill}, symlinks: map[string]string{"skills": "extra"}},
+	}
+	for _, component := range []string{"commands", "agents", "workflows", "hooks", "output-styles", "themes", "monitors", "bin", "settings"} {
+		cases = append(cases, struct {
+			name, manifest  string
+			files, symlinks map[string]string
+			valid           bool
+		}{name: "unsupported " + component, files: map[string]string{component + "/entry": "text"}})
+	}
+	for _, component := range []string{".mcp.json", ".lsp.json", "settings.json"} {
+		cases = append(cases, struct {
+			name, manifest  string
+			files, symlinks map[string]string
+			valid           bool
+		}{name: "unsupported " + component, files: map[string]string{component: "{}"}})
+	}
+	for _, component := range []string{"commands", "agents", "workflows", "hooks", "mcpServers", "lspServers", "outputStyles", "themes", "monitors", "bin", "settings"} {
+		cases = append(cases, struct {
+			name, manifest  string
+			files, symlinks map[string]string
+			valid           bool
+		}{name: "manifest unsupported " + component, manifest: `{"name":"plugin-one","` + component + `":{}}`})
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			manifest := tc.manifest
+			if manifest == "" {
+				manifest = `{"name":"plugin-one"}`
+			}
+			fixture := newPluginSourceFixture(t, pluginSourceFixtureOptions{manifest: manifest, files: tc.files, symlinks: tc.symlinks})
+			inspector, err := NewPluginSourceInspector(fixture.service)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = inspector.InspectPluginSource(context.Background(), pluginSourceRepositoryID, "v1.2.3", "plugin-one")
+			if tc.valid {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || err.Error() != ErrPluginSourceInvalid.Error() {
+				t.Fatalf("want stable redacted rejection, got %v", err)
+			}
+		})
+	}
+}

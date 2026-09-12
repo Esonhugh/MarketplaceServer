@@ -67,7 +67,7 @@ Domain command/result、query projection 和 cross-module contract 可以按实�
 
 Claude Code `marketplace.json` 是 distribution 外部格式，不是 management API DTO。MarketplaceServer 的职责是通过 [`pkg/marketplacejson`](../../pkg/marketplacejson/) 生成受支持的官方格式，并施加本地 distribution 约束，例如稳定排序、可访问 URL、tag/ref 和完整 distribution SHA。
 
-Plugin 仓库内容验证属于受保护 Git receive 流程：默认分支运行 `claude plugin validate`，tag 使用 strict validation，并检查 manifest name 与 Plugin name 精确一致。Marketplace 生成不重复承担 Plugin repository validator 的职责，也不需要在服务运行时引入通用 JSON Schema validator。
+Plugin 仓库内容验证属于受保护 Git receive 流程：普通分支不触发验证；canonical tag 使用 [Plugin Profile v1](systems/02-plugin-lifecycle/git/api-contract.md#marketplaceserver-plugin-profile-v1--normative-source-validation) native validation，并检查 manifest name 与 Plugin name 精确一致。Marketplace 生成不重复承担 Plugin repository validator 的职责，也不需要在服务运行时引入通用 JSON Schema validator。
 
 格式来源记录见 [`schemas/marketplace/README.md`](../../schemas/marketplace/README.md)。Management OpenAPI 不定义或包装 `marketplace.json`。
 

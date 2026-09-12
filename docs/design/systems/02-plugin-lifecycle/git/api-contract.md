@@ -28,12 +28,12 @@ Draft clone/fetch is available to current authorized `plugin.read` principals bu
 
 ## Ref admission
 
-Git objects remain in quarantine while the complete proposed ref command set is inspected.
+Inspection uses the current receive's object environment so newly uploaded objects are visible when resolving and materializing proposed commits. Whole-push rejection guarantees unchanged refs, not immediate object removal: Git may already have promoted incoming objects before `proc-receive` rejects the commands, leaving unreachable objects for normal Git maintenance.
 
 | Ref operation | Admission/effect |
 |---|---|
 | `main`, ordinary branches, noncanonical tags | no Plugin validator and no lifecycle effect |
-| candidate canonical tag create/move | strict `claude plugin validate`; warnings and errors reject; exact case-sensitive manifest name; annotated tag peels to commit |
+| candidate canonical tag create/move | native MarketplaceServer Plugin Profile v1 validation; exact case-sensitive manifest name; annotated tag peels to commit |
 | candidate canonical tag delete | directly allowed under `plugin.write`; no Version tombstone/default/Marketplace work |
 | available tag move | strict validation/name check and prebuild every referencing Marketplace revision |
 | available tag delete | no validator; reject if any active Marketplace revision references Plugin+tag; otherwise prepare Version deletion/default clear/pointer isolation |
@@ -123,3 +123,58 @@ Distribution handlers remain absolutely read-only and may not initialize reposit
 ## Process and secrecy rules
 
 Git subprocesses use `exec.CommandContext`, fixed arguments, minimal environment, timeout and storage-root containment. Protocol/log/audit/error output must omit Authorization, PAT, pack body, absolute repository/quarantine path, sensitive command output and raw validator output. Real-client tests are mandatory for allow/deny and whole-push rejection behavior.
+
+## MarketplaceServer Plugin Profile v1 — normative source validation
+
+Profile v1 is a versioned, native `mod/git` product admission policy, not a copy of Claude Code's internal validator. It never invokes Claude CLI or executes Plugin content. Unknown fields and unsupported components reject; there is no warning-only admission. Canonical receive and management inspection use the same profile. The five runtime modules and `PluginSourceInspector` contract are unchanged. This unreleased product has no legacy-validator compatibility mode or binary setting.
+
+References for the supported subset: [official Plugin reference](https://code.claude.com/docs/en/plugins-reference), [official skills documentation](https://code.claude.com/docs/en/skills), and [Agent Skills format](https://agentskills.io/specification). Upstream additions do not silently expand this fixed profile; extensions require an explicit profile revision and tests.
+
+### Manifest
+
+`.claude-plugin/plugin.json` is required, regular UTF-8 JSON, a single object with exact case-sensitive keys and no duplicate fields. `name` is required, must match the expected Plugin slug exactly, and uses the existing lowercase kebab-case slug policy. Only these fields are admitted:
+
+| Fields | Type / rule |
+|---|---|
+| `name` | required string, exact Plugin slug |
+| `displayName`, `description`, `homepage`, `repository`, `license` | string |
+| `version` | strict SemVer string without `v` prefix; metadata only, never Version identity |
+| `author` | object with only optional string `name`, `email`, `url` |
+| `keywords` | array of strings |
+| `metadata` | JSON object, opaque data (not executable component configuration) |
+| `defaultEnabled` | boolean |
+| `skills` | string or array of strings, component collection paths below |
+
+Official documentation cross-check (2026-09-12): `displayName`, `metadata`, and `defaultEnabled` are documented manifest fields, not marketplace-only extensions. Upstream also accepts `$schema`, additional executable component/configuration fields (`experimental`, `userConfig`, `channels`, `dependencies`, etc.), trailing-slash paths and single-skill directory packaging; these are deliberately outside this fixed profile. Upstream's author description expects `name`; this profile admits an empty author object as descriptive metadata. This table, not the evolving upstream validator, is the admission authority.
+
+Present fields cannot be null. URL/contact/license fields are descriptive strings, not fetched or interpreted by the server. Minimal manifest-only Plugins are allowed; a skill is not mandatory.
+
+### Skills-only component boundary
+
+Default `./skills` is always scanned if present. Manifest `skills` adds collection directories, not replacements for the default. Every configured path must start `./`, contain no empty, dot, parent or backslash segment, remain within Plugin root and exist as a directory. Repeated identical collection paths scan once. Symlinks are not accepted as collection directories, skill directories or SKILL.md files.
+
+Every direct collection entry must be a directory with a regular `SKILL.md`; auxiliary resources may live within that skill directory and are not executed. All discovered effective skill names are unique across default and custom collections. Nested collections are not recursively discovered. A single repository-root or collection-root `SKILL.md` is rejected: standalone single-skill packaging is not this product's mandatory-manifest Plugin shape.
+
+The conventional root entries `commands`, `agents`, `workflows`, `hooks`, `.mcp.json`, `.lsp.json`, `output-styles`, `themes`, `monitors`, `bin`, `settings`, `settings.json` are unsupported even when empty. Corresponding manifest configuration is not in the allowlist and rejects. Skill frontmatter `hooks` and any unknown execution configuration also reject. This is format admission, not a sandbox or a claim that accepted skill instructions/resources are safe to execute on clients.
+
+### SKILL.md frontmatter
+
+The entire file must be UTF-8 without NUL. The first line is exactly `---` (LF or CRLF); a later exact `---` closes frontmatter. Frontmatter is exactly one YAML mapping parsed by `gopkg.in/yaml.v3`. Duplicate/unknown keys, aliases used as field values, merge keys, non-string keys and incorrect scalar tags reject. YAML parse diagnostics and source content never escape the validator.
+
+| Fields | Type / rule |
+|---|---|
+| `name` | optional string; fallback to directory basename; lowercase kebab-case, 1–64 bytes, globally unique within Plugin |
+| `description` | required nonblank string; product requirement for usable discovery, deliberately stricter than optional upstream fallback |
+| `argument-hint`, `model`, `agent`, `license`, `compatibility` | string |
+| `context` | string `fork` only |
+| `disable-model-invocation`, `user-invocable` | YAML boolean |
+| `allowed-tools` | string or sequence of strings; not executed or resolved server-side |
+| `metadata` | mapping of unique string keys to string values |
+
+Markdown body is preserved and is not interpreted. No shell, tool, hook, model or agent is invoked during validation.
+
+### Limits, diagnostics and persistence
+
+Existing materialization limits remain 10,000 Git blob entries, 16 MiB per file, 256 MiB total source and 1 MiB manifest. All component input is drawn from that bounded materialization. Gitlinks, escaping paths/symlinks and symlink traversal during materialization reject. Auxiliary symlinks must resolve within the completed materialized tree; dangling links, cycles and chained escapes reject. They are not component entry points. Tree listing output is bounded to 16 MiB before parsing; JSON nesting is limited to 64 levels and duplicate keys reject at every depth, including opaque metadata. YAML frontmatter is bounded to 64 KiB (after CRLF normalization); Markdown body remains subject to the file limit. These parser limits prevent bounded file bytes from producing disproportionate parser allocations.
+
+Internal typed diagnostics contain only stable category codes; their public error text and unwrap target are `ErrPluginSourceInvalid` (`plugin source validation failed`). No server path, source text, parser diagnostic or subprocess output is returned or logged. Context cancellation remains cancellation. The manifest snapshot is still the exact original bytes, and its digest remains SHA-256 of those bytes, independent of path/environment/profile metadata; raw tag and peeled commit identities are retained unchanged.

@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -33,26 +32,19 @@ const (
 )
 
 type pluginSourceInspector struct {
-	service         *Service
-	validatorBinary string
+	service *Service
 }
 
-// NewPluginSourceInspector constructs the strict source-inspection capability.
-// validatorBinary is deliberately supplied by the caller so tests can run with
-// an isolated executable rather than a locally installed Claude binary.
-func NewPluginSourceInspector(service *Service, validatorBinary string) (gitservice.PluginSourceInspector, error) {
-	if service == nil || validatorBinary == "" {
+// NewPluginSourceInspector constructs the native Profile v1 inspection capability.
+func NewPluginSourceInspector(service *Service) (gitservice.PluginSourceInspector, error) {
+	if service == nil {
 		return nil, errors.New("plugin source inspector is not configured")
 	}
-	validator, err := resolveExecutable(validatorBinary)
-	if err != nil {
-		return nil, errors.New("plugin source inspector is not configured")
-	}
-	return &pluginSourceInspector{service: service, validatorBinary: validator}, nil
+	return &pluginSourceInspector{service: service}, nil
 }
 
 func (s *pluginSourceInspector) InspectPluginSource(ctx context.Context, repositoryID, canonicalTag, expectedPluginSlug string) (gitservice.PluginSourceInspection, error) {
-	if s == nil || s.service == nil || s.validatorBinary == "" {
+	if s == nil || s.service == nil {
 		return gitservice.PluginSourceInspection{}, errors.New("plugin source inspector is not configured")
 	}
 	if err := validateRepositoryID(repositoryID); err != nil {
@@ -87,17 +79,14 @@ func (s *pluginSourceInspector) InspectPluginSource(ctx context.Context, reposit
 	}
 	defer os.RemoveAll(materializedRoot)
 	materializedDirectory := filepath.Join(materializedRoot, "source")
-	if err := s.materializeCommit(ctx, repositoryPath, commitObjectID, materializedDirectory); err != nil {
+	if err := s.materializeCommit(ctx, repositoryPath, commitObjectID, materializedDirectory, pluginSourceGitEnv()); err != nil {
 		return gitservice.PluginSourceInspection{}, err
 	}
 	manifestSnapshot, err := readPluginManifest(materializedDirectory)
 	if err != nil {
 		return gitservice.PluginSourceInspection{}, err
 	}
-	if !manifestHasExpectedName(manifestSnapshot, expectedPluginSlug) {
-		return gitservice.PluginSourceInspection{}, ErrPluginSourceInvalid
-	}
-	if err := s.runStrictValidator(ctx, materializedDirectory); err != nil {
+	if err := validatePluginProfileV1(ctx, materializedDirectory, manifestSnapshot, expectedPluginSlug); err != nil {
 		return gitservice.PluginSourceInspection{}, err
 	}
 	digest := sha256.Sum256(manifestSnapshot)
@@ -134,7 +123,7 @@ func (s *pluginSourceInspector) peelCommit(ctx context.Context, repositoryPath, 
 	return commitObjectID, nil
 }
 
-func (s *pluginSourceInspector) inspectCommit(ctx context.Context, repositoryPath, rawObjectID, commitObjectID, expectedPluginSlug string) (gitservice.PluginSourceInspection, error) {
+func (s *pluginSourceInspector) inspectCommit(ctx context.Context, repositoryPath, rawObjectID, commitObjectID, expectedPluginSlug string, gitEnvironment []string) (gitservice.PluginSourceInspection, error) {
 	if !validGitObjectID(rawObjectID) || !validGitObjectID(commitObjectID) || validateSlug(expectedPluginSlug) != nil {
 		return gitservice.PluginSourceInspection{}, ErrPluginSourceInvalid
 	}
@@ -144,14 +133,14 @@ func (s *pluginSourceInspector) inspectCommit(ctx context.Context, repositoryPat
 	}
 	defer os.RemoveAll(materializedRoot)
 	materializedDirectory := filepath.Join(materializedRoot, "source")
-	if err := s.materializeCommit(ctx, repositoryPath, commitObjectID, materializedDirectory); err != nil {
+	if err := s.materializeCommit(ctx, repositoryPath, commitObjectID, materializedDirectory, gitEnvironment); err != nil {
 		return gitservice.PluginSourceInspection{}, err
 	}
 	manifestSnapshot, err := readPluginManifest(materializedDirectory)
-	if err != nil || !manifestHasExpectedName(manifestSnapshot, expectedPluginSlug) {
+	if err != nil {
 		return gitservice.PluginSourceInspection{}, ErrPluginSourceInvalid
 	}
-	if err := s.runStrictValidator(ctx, materializedDirectory); err != nil {
+	if err := validatePluginProfileV1(ctx, materializedDirectory, manifestSnapshot, expectedPluginSlug); err != nil {
 		return gitservice.PluginSourceInspection{}, err
 	}
 	digest := sha256.Sum256(manifestSnapshot)
@@ -161,18 +150,22 @@ func (s *pluginSourceInspector) inspectCommit(ctx context.Context, repositoryPat
 	}, nil
 }
 
-func (s *pluginSourceInspector) materializeCommit(ctx context.Context, repositoryPath, commitObjectID, directory string) error {
+func (s *pluginSourceInspector) materializeCommit(ctx context.Context, repositoryPath, commitObjectID, directory string, gitEnvironment []string) error {
 	if err := os.Mkdir(directory, 0o700); err != nil {
 		return ErrPluginSourceUnavailable
 	}
 	command := exec.CommandContext(ctx, s.service.gitBinary, "--git-dir="+repositoryPath, "ls-tree", "-rz", "--full-tree", commitObjectID)
-	command.Env = pluginSourceGitEnv()
+	command.Env = gitEnvironment
 	command.Stderr = io.Discard
-	output, err := command.Output()
-	if err != nil {
+	output := &pluginSourceTreeWriter{remaining: 16 << 20}
+	command.Stdout = output
+	if err := command.Run(); err != nil {
+		if output.exceeded {
+			return ErrPluginSourceInvalid
+		}
 		return ErrPluginSourceUnavailable
 	}
-	entries, err := parsePluginSourceTree(output)
+	entries, err := parsePluginSourceTree(output.Bytes())
 	if err != nil {
 		return ErrPluginSourceInvalid
 	}
@@ -190,20 +183,20 @@ func (s *pluginSourceInspector) materializeCommit(ctx context.Context, repositor
 		}
 		switch entry.mode {
 		case "100644", "100755":
-			size, err := s.objectSize(ctx, repositoryPath, entry.objectID)
+			size, err := s.objectSize(ctx, repositoryPath, entry.objectID, gitEnvironment)
 			if err != nil || size > maxPluginSourceFileSize || total+size > maxPluginSourceBytes {
 				return ErrPluginSourceInvalid
 			}
-			if err := s.materializeBlob(ctx, repositoryPath, entry.objectID, path, size); err != nil {
+			if err := s.materializeBlob(ctx, repositoryPath, entry.objectID, path, size, gitEnvironment); err != nil {
 				return err
 			}
 			total += size
 		case "120000":
-			size, err := s.objectSize(ctx, repositoryPath, entry.objectID)
+			size, err := s.objectSize(ctx, repositoryPath, entry.objectID, gitEnvironment)
 			if err != nil || size <= 0 || size > maxPluginSourceFileSize || total+size > maxPluginSourceBytes {
 				return ErrPluginSourceInvalid
 			}
-			target, err := s.readBlob(ctx, repositoryPath, entry.objectID, size)
+			target, err := s.readBlob(ctx, repositoryPath, entry.objectID, size, gitEnvironment)
 			if err != nil || createPluginSourceSymlink(directory, path, string(target)) != nil {
 				return ErrPluginSourceInvalid
 			}
@@ -212,7 +205,41 @@ func (s *pluginSourceInspector) materializeCommit(ctx context.Context, repositor
 			return ErrPluginSourceInvalid
 		}
 	}
+	resolvedRoot, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		return ErrPluginSourceInvalid
+	}
+	// Resolve links only after all entries exist. Lexical cleaning alone misses
+	// escapes such as alias/../outside when alias points back to the root.
+	for _, entry := range entries {
+		if entry.mode != "120000" {
+			continue
+		}
+		path, err := pluginSourcePath(directory, entry.name)
+		if err != nil {
+			return ErrPluginSourceInvalid
+		}
+		target, err := filepath.EvalSymlinks(path)
+		if err != nil || ensurePathWithinRoot(resolvedRoot, target) != nil {
+			return ErrPluginSourceInvalid
+		}
+	}
 	return nil
+}
+
+type pluginSourceTreeWriter struct {
+	bytes.Buffer
+	remaining int
+	exceeded  bool
+}
+
+func (w *pluginSourceTreeWriter) Write(data []byte) (int, error) {
+	if len(data) > w.remaining {
+		w.exceeded = true
+		return 0, ErrPluginSourceInvalid
+	}
+	w.remaining -= len(data)
+	return w.Buffer.Write(data)
 }
 
 type pluginSourceTreeEntry struct {
@@ -258,10 +285,10 @@ func pluginSourcePath(destination, name string) (string, error) {
 	return path, nil
 }
 
-func (s *pluginSourceInspector) objectSize(ctx context.Context, repositoryPath, objectID string) (int64, error) {
+func (s *pluginSourceInspector) objectSize(ctx context.Context, repositoryPath, objectID string, gitEnvironment []string) (int64, error) {
 	var output bytes.Buffer
 	command := exec.CommandContext(ctx, s.service.gitBinary, "--git-dir="+repositoryPath, "cat-file", "-s", objectID)
-	command.Env = pluginSourceGitEnv()
+	command.Env = gitEnvironment
 	command.Stdout = &output
 	command.Stderr = io.Discard
 	if err := command.Run(); err != nil {
@@ -274,13 +301,13 @@ func (s *pluginSourceInspector) objectSize(ctx context.Context, repositoryPath, 
 	return size, nil
 }
 
-func (s *pluginSourceInspector) materializeBlob(ctx context.Context, repositoryPath, objectID, path string, size int64) error {
+func (s *pluginSourceInspector) materializeBlob(ctx context.Context, repositoryPath, objectID, path string, size int64, gitEnvironment []string) error {
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return ErrPluginSourceInvalid
 	}
 	command := exec.CommandContext(ctx, s.service.gitBinary, "--git-dir="+repositoryPath, "cat-file", "blob", objectID)
-	command.Env = pluginSourceGitEnv()
+	command.Env = gitEnvironment
 	command.Stdout = file
 	command.Stderr = io.Discard
 	runErr := command.Run()
@@ -295,12 +322,12 @@ func (s *pluginSourceInspector) materializeBlob(ctx context.Context, repositoryP
 	return nil
 }
 
-func (s *pluginSourceInspector) readBlob(ctx context.Context, repositoryPath, objectID string, size int64) ([]byte, error) {
+func (s *pluginSourceInspector) readBlob(ctx context.Context, repositoryPath, objectID string, size int64, gitEnvironment []string) ([]byte, error) {
 	if size > maxPluginSourceFileSize {
 		return nil, ErrPluginSourceInvalid
 	}
 	command := exec.CommandContext(ctx, s.service.gitBinary, "--git-dir="+repositoryPath, "cat-file", "blob", objectID)
-	command.Env = pluginSourceGitEnv()
+	command.Env = gitEnvironment
 	command.Stderr = io.Discard
 	output, err := command.Output()
 	if err != nil || int64(len(output)) != size {
@@ -353,39 +380,6 @@ func createPluginSourceSymlink(root, path, linkTarget string) error {
 	return os.Symlink(linkTarget, path)
 }
 
-func (s *pluginSourceInspector) runStrictValidator(ctx context.Context, directory string) error {
-	output := &boundedValidatorOutput{remaining: 1 << 20}
-	command := exec.CommandContext(ctx, s.validatorBinary, "plugin", "validate", directory, "--strict")
-	command.Env = pluginSourceGitEnv()
-	command.Stdout = output
-	command.Stderr = output
-	if err := command.Run(); err != nil {
-		return ErrPluginSourceInvalid
-	}
-	if output.overflow || validatorOutputHasDiagnostic(string(output.contents)) {
-		return ErrPluginSourceInvalid
-	}
-	return nil
-}
-
-type boundedValidatorOutput struct {
-	contents  []byte
-	remaining int
-	overflow  bool
-}
-
-func (output *boundedValidatorOutput) Write(data []byte) (int, error) {
-	if len(data) > output.remaining {
-		output.contents = append(output.contents, data[:output.remaining]...)
-		output.remaining = 0
-		output.overflow = true
-		return len(data), nil
-	}
-	output.contents = append(output.contents, data...)
-	output.remaining -= len(data)
-	return len(data), nil
-}
-
 func readPluginManifest(directory string) ([]byte, error) {
 	manifestPath := filepath.Join(directory, filepath.FromSlash(pluginManifestPath))
 	if err := ensurePathWithinRoot(directory, manifestPath); err != nil {
@@ -407,18 +401,6 @@ func readPluginManifest(directory string) ([]byte, error) {
 	return snapshot, nil
 }
 
-func manifestHasExpectedName(snapshot []byte, expectedPluginSlug string) bool {
-	var manifest struct {
-		Name string `json:"name"`
-	}
-	return json.Unmarshal(snapshot, &manifest) == nil && manifest.Name == expectedPluginSlug
-}
-
-func validatorOutputHasDiagnostic(output string) bool {
-	lowerOutput := strings.ToLower(output)
-	return strings.Contains(lowerOutput, "warning") || strings.Contains(lowerOutput, "error")
-}
-
 func pluginSourceGitEnv() []string {
 	env := []string{
 		"GIT_CONFIG_NOSYSTEM=1",
@@ -431,15 +413,4 @@ func pluginSourceGitEnv() []string {
 		env = append(env, "PATH="+path)
 	}
 	return env
-}
-
-func resolveExecutable(binary string) (string, error) {
-	if strings.Contains(binary, string(os.PathSeparator)) || filepath.IsAbs(binary) {
-		info, err := os.Stat(binary)
-		if err != nil || info.IsDir() || info.Mode().Perm()&0o111 == 0 {
-			return "", errors.New("not executable")
-		}
-		return binary, nil
-	}
-	return exec.LookPath(binary)
 }

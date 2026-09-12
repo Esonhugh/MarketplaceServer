@@ -540,7 +540,7 @@ func TestPreReceiveHookReturnsWithoutWaitingForResponse(t *testing.T) {
 			serverDone <- readErr
 			return
 		}
-		if got, want := string(payload), "pre-receive\ncommand\n"; got != want {
+		if got, want := string(payload), "pre-receive e30\ncommand\n"; got != want {
 			serverDone <- fmt.Errorf("hook payload = %q, want %q", got, want)
 			return
 		}

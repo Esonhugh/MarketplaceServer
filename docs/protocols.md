@@ -48,7 +48,7 @@ POST /git/{namespace}/{repo}.git/git-receive-pack
 4. backend resolver 将 slug 转为 opaque repository ID、visibility、status。
 5. 通过 Plugin 解析其隐藏 repository；Plugin read 同时授权 metadata 与 upload-pack，Plugin write 单独授权 receive-pack。Repository 不暴露独立产品权限。
 6. receive-pack 在每次请求前幂等修复受管 `pre-receive`/`proc-receive` hook；hook 以专用环境变量重启同一 server executable，并通过请求生命周期内的临时 Unix socket 与运行中 coordinator 通信。
-7. `receive.procReceiveRefs` 只覆盖 `refs/tags/`；普通 branch 由 receive-pack 原生处理。canonical tag 的 proposed object 在 quarantine 可见时解析 raw tag ID、peel commit，在隔离目录运行严格 Claude Plugin validation 和 exact name check。
+7. `receive.procReceiveRefs` 覆盖 `refs/heads/` 与 `refs/tags/`，由同一个 expected-old ref transaction 保证整次 push 不部分更新；普通 branch 不触发 Plugin validation。canonical tag 的 proposed object 使用当次 receive 传递的 object environment 解析 raw tag ID、peel commit，在隔离目录运行[MarketplaceServer Plugin Profile v1](design/systems/02-plugin-lifecycle/git/api-contract.md#marketplaceserver-plugin-profile-v1--normative-source-validation) native validation 和 exact name check。
 8. Effectful available-Version transition 先 durable prepare 和所需 Marketplace revision projection prebuild，再用 `git update-ref --stdin` expected-old transaction 更新本次受保护 refs，随后重读实际 refs并将 batch 解析为 completed、aborted 或 manual-required；任一 admission/prebuild 失败拒绝整次受保护 tag push。
 9. 用 `exec.CommandContext` 和独立参数调用受控 Git binary；物理路径只由 storage root 与 opaque ID 计算，使用 containment check，环境不继承危险 `GIT_*`。流式转发 Git content type，限制 body/header，设置 timeout，client disconnect 时取消 subprocess。
 10. coordinator 不宣称 Git/SQL 跨系统 ACID，也不会在 reconciliation 中强制移动 refs；receive、orphan cleanup 与 projection GC recovery 已提供可调用入口，常驻 worker 调度仍在规划中。

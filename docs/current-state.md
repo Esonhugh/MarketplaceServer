@@ -192,3 +192,5 @@ Identity 字段以 `mod/backend/domain/identity/model/` 为准，查询与 migra
 - [协议](protocols.md)
 - [运维与验证](operations.md)
 - [路线图](roadmap.md)
+
+Plugin source inspection now uses native `mod/git` [MarketplaceServer Plugin Profile v1](design/systems/02-plugin-lifecycle/git/api-contract.md#marketplaceserver-plugin-profile-v1--normative-source-validation): skills-only admission with strict manifest/frontmatter validation, without a Claude CLI runtime dependency. Manifest snapshot/digest and receive/backend contracts remain unchanged. Real-client acceptance confirms fresh incoming objects are visible during protected validation and invalid multi-ref pushes leave all refs unchanged; rejected objects may remain unreachable rather than being immediately removed.

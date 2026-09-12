@@ -3,6 +3,8 @@ package git
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -194,6 +196,68 @@ func RunPreReceiveSession(ctx context.Context, input io.Reader, objectFormat Obj
 	return nil
 }
 
+type receiveObjectEnvironmentContextKey struct{}
+
+type receiveObjectEnvironment struct {
+	ObjectDirectory            string `json:"objectDirectory,omitempty"`
+	AlternateObjectDirectories string `json:"alternateObjectDirectories,omitempty"`
+	QuarantinePath             string `json:"quarantinePath,omitempty"`
+}
+
+func receiveObjectEnvironmentFromProcess() receiveObjectEnvironment {
+	return receiveObjectEnvironment{
+		ObjectDirectory:            os.Getenv("GIT_OBJECT_DIRECTORY"),
+		AlternateObjectDirectories: os.Getenv("GIT_ALTERNATE_OBJECT_DIRECTORIES"),
+		QuarantinePath:             os.Getenv("GIT_QUARANTINE_PATH"),
+	}
+}
+
+func contextWithReceiveObjectEnvironment(ctx context.Context, environment receiveObjectEnvironment) context.Context {
+	return context.WithValue(ctx, receiveObjectEnvironmentContextKey{}, environment)
+}
+
+func receiveObjectEnvironmentFromContext(ctx context.Context) receiveObjectEnvironment {
+	environment, _ := ctx.Value(receiveObjectEnvironmentContextKey{}).(receiveObjectEnvironment)
+	return environment
+}
+
+func (e receiveObjectEnvironment) gitEnvironment() []string {
+	environment := minimalGitEnvironment()
+	for _, entry := range []struct{ name, value string }{
+		{"GIT_OBJECT_DIRECTORY", e.ObjectDirectory},
+		{"GIT_ALTERNATE_OBJECT_DIRECTORIES", e.AlternateObjectDirectories},
+		{"GIT_QUARANTINE_PATH", e.QuarantinePath},
+	} {
+		if entry.value != "" {
+			environment = append(environment, entry.name+"="+entry.value)
+		}
+	}
+	return environment
+}
+
+func encodeReceiveObjectEnvironment(environment receiveObjectEnvironment) (string, error) {
+	payload, err := json.Marshal(environment)
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(payload), nil
+}
+
+func decodeReceiveObjectEnvironment(encoded string) (receiveObjectEnvironment, error) {
+	if encoded == "" {
+		return receiveObjectEnvironment{}, nil
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return receiveObjectEnvironment{}, errors.New("invalid protected receive environment")
+	}
+	var environment receiveObjectEnvironment
+	if err := json.Unmarshal(payload, &environment); err != nil {
+		return receiveObjectEnvironment{}, errors.New("invalid protected receive environment")
+	}
+	return environment, nil
+}
+
 type receiveHookSession struct {
 	listener       net.Listener
 	done           chan error
@@ -305,7 +369,7 @@ func (s *receiveHookSession) serve(ctx context.Context) {
 			return
 		}
 		reader := bufio.NewReader(connection)
-		mode, err := reader.ReadString('\n')
+		requestHeader, err := reader.ReadString('\n')
 		if err != nil {
 			s.clearConnection(connection)
 			closeHookConnection(connection)
@@ -316,7 +380,25 @@ func (s *receiveHookSession) serve(ctx context.Context) {
 			}
 			return
 		}
-		switch strings.TrimSpace(mode) {
+		headerFields := strings.Fields(strings.TrimSpace(requestHeader))
+		if len(headerFields) == 0 || len(headerFields) > 2 {
+			s.clearConnection(connection)
+			closeHookConnection(connection)
+			s.done <- errors.New("invalid protected receive hook request")
+			return
+		}
+		objectEnvironment := receiveObjectEnvironment{}
+		if len(headerFields) == 2 {
+			objectEnvironment, err = decodeReceiveObjectEnvironment(headerFields[1])
+			if err != nil {
+				s.clearConnection(connection)
+				closeHookConnection(connection)
+				s.done <- err
+				return
+			}
+		}
+		hookContext := contextWithReceiveObjectEnvironment(ctx, objectEnvironment)
+		switch headerFields[0] {
 		case "pre-receive":
 			_, err = io.Copy(io.Discard, reader)
 			s.clearConnection(connection)
@@ -334,9 +416,9 @@ func (s *receiveHookSession) serve(ctx context.Context) {
 			lifecycle := &protectedReceiveLifecycle{
 				coordinator: s.context.coordinator, service: s.service, inspector: s.inspector,
 				repositoryID: s.context.repositoryID, repositoryPath: s.repositoryPath,
-				plugin: plugin, sessionID: s.sessionID,
+				plugin: plugin, sessionID: s.sessionID, objectEnvironment: objectEnvironment,
 			}
-			err = RunCoordinatedProcReceiveSession(ctx, s.service.gitBinary, s.repositoryPath, reader, connection, lifecycle)
+			err = RunCoordinatedProcReceiveSession(hookContext, s.service.gitBinary, s.repositoryPath, reader, connection, lifecycle)
 			s.clearConnection(connection)
 			closeHookConnection(connection)
 			s.done <- err
@@ -363,7 +445,11 @@ func runReceiveHookClient(ctx context.Context, mode, socketPath string, input io
 		closeHookConnection(connection)
 	})
 	defer stopCancellation()
-	if _, err := io.WriteString(connection, mode+"\n"); err != nil {
+	encodedEnvironment, err := encodeReceiveObjectEnvironment(receiveObjectEnvironmentFromProcess())
+	if err != nil {
+		return errors.New("protected receive request failed")
+	}
+	if _, err := io.WriteString(connection, mode+" "+encodedEnvironment+"\n"); err != nil {
 		return errors.New("protected receive request failed")
 	}
 	if mode == "proc-receive" {
@@ -402,15 +488,16 @@ func runReceiveHookClient(ctx context.Context, mode, socketPath string, input io
 }
 
 type protectedReceiveLifecycle struct {
-	coordinator    gitservice.ReceiveCoordinator
-	service        *Service
-	inspector      *pluginSourceInspector
-	repositoryID   string
-	repositoryPath string
-	plugin         gitservice.ReceivePlugin
-	sessionID      string
-	coordination   gitservice.ReceiveCoordination
-	prepared       gitservice.PreparedReceiveBatch
+	coordinator       gitservice.ReceiveCoordinator
+	service           *Service
+	inspector         *pluginSourceInspector
+	repositoryID      string
+	repositoryPath    string
+	plugin            gitservice.ReceivePlugin
+	sessionID         string
+	coordination      gitservice.ReceiveCoordination
+	prepared          gitservice.PreparedReceiveBatch
+	objectEnvironment receiveObjectEnvironment
 }
 
 func (l *protectedReceiveLifecycle) Prepare(ctx context.Context, commands []ReceiveCommand) error {
@@ -435,7 +522,7 @@ func (l *protectedReceiveLifecycle) Prepare(ctx context.Context, commands []Rece
 			return errors.New("canonical tag rejected")
 		}
 		if tagCommand.Operation != gitservice.ReceiveTagDelete {
-			inspection, err := l.inspector.inspectCommit(ctx, l.repositoryPath, tagCommand.NewObjectID, tagCommand.NewCommitObjectID, l.plugin.Name)
+			inspection, err := l.inspector.inspectCommit(ctx, l.repositoryPath, tagCommand.NewObjectID, tagCommand.NewCommitObjectID, l.plugin.Name, l.objectEnvironment.gitEnvironment())
 			if err != nil {
 				l.close()
 				return errors.New("canonical tag rejected")
@@ -455,7 +542,7 @@ func (l *protectedReceiveLifecycle) Prepare(ctx context.Context, commands []Rece
 }
 
 func (l *protectedReceiveLifecycle) classifyTag(ctx context.Context, tag string, command ReceiveCommand) (gitservice.ReceiveTagCommand, error) {
-	objects := repositoryReceiveObjects{gitBinary: l.service.gitBinary, repositoryPath: l.repositoryPath}
+	objects := repositoryReceiveObjects{gitBinary: l.service.gitBinary, repositoryPath: l.repositoryPath, environment: l.objectEnvironment}
 	admission := ReceiveAdmission{objects: objects}
 	return admission.classifyTag(ctx, tag, command)
 }
@@ -489,11 +576,12 @@ func (l *protectedReceiveLifecycle) close() {
 type repositoryReceiveObjects struct {
 	gitBinary      string
 	repositoryPath string
+	environment    receiveObjectEnvironment
 }
 
 func (o repositoryReceiveObjects) PeelCommit(ctx context.Context, objectID string) (string, error) {
 	command := exec.CommandContext(ctx, o.gitBinary, "--git-dir="+o.repositoryPath, "rev-parse", "--verify", objectID+"^{commit}")
-	command.Env = minimalGitEnvironment()
+	command.Env = o.environment.gitEnvironment()
 	command.Stderr = io.Discard
 	output, err := command.Output()
 	if err != nil {
@@ -607,7 +695,7 @@ func RunCoordinatedProcReceiveSession(ctx context.Context, gitBinary, repository
 		return err
 	}
 	cmd := exec.CommandContext(ctx, gitBinary, "--git-dir="+repositoryPath, "update-ref", "--stdin")
-	cmd.Env = minimalGitEnvironment()
+	cmd.Env = receiveObjectEnvironmentFromContext(ctx).gitEnvironment()
 	cmd.Stdin = bytesReader(transaction)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
@@ -758,13 +846,7 @@ func writeProcReceiveResults(output io.Writer, commands []ReceiveCommand, accept
 }
 
 func minimalGitEnvironment() []string {
-	environment := []string{"GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0", "LANG=C"}
-	for _, name := range []string{"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_QUARANTINE_PATH"} {
-		if value, ok := os.LookupEnv(name); ok {
-			environment = append(environment, name+"="+value)
-		}
-	}
-	return environment
+	return []string{"GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0", "LANG=C"}
 }
 
 func bytesReader(data []byte) io.Reader {

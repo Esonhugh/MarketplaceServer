@@ -21,15 +21,13 @@ var _ kernel.Module = (*Mod)(nil)
 
 const (
 	defaultGitBinary        = "git"
-	defaultValidatorBinary  = "claude"
 	defaultMaxRequestBytes  = int64(100 << 20)
 	defaultAdvertiseTimeout = 15 * time.Second
 	defaultServiceTimeout   = 5 * time.Minute
 )
 
 type Config struct {
-	StorageRoot     string `yaml:"storageRoot" mapstructure:"storageRoot"`
-	ValidatorBinary string `yaml:"validatorBinary" mapstructure:"validatorBinary"`
+	StorageRoot string `yaml:"storageRoot" mapstructure:"storageRoot"`
 
 	gitBinary        string
 	maxRequestBytes  int64
@@ -75,7 +73,7 @@ func (m *Mod) Init(hub *kernel.Hub) error {
 	if err != nil {
 		return err
 	}
-	inspector, err := NewPluginSourceInspector(svc, m.config.ValidatorBinary)
+	inspector, err := NewPluginSourceInspector(svc)
 	if err != nil {
 		return err
 	}
@@ -170,9 +168,6 @@ func nilInterface(value any) bool {
 func (m *Mod) applyDefaults() {
 	if m.config.gitBinary == "" {
 		m.config.gitBinary = defaultGitBinary
-	}
-	if m.config.ValidatorBinary == "" {
-		m.config.ValidatorBinary = defaultValidatorBinary
 	}
 	if m.config.maxRequestBytes == 0 {
 		m.config.maxRequestBytes = defaultMaxRequestBytes

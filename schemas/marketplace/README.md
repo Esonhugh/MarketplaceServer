@@ -37,8 +37,8 @@ Anthropic 的 `anthropics/claude-code` Marketplace example 使用：
 
 Plugin 仓库负责内容 admission validation：
 
-- protected default branch：`claude plugin validate <isolated-dir>`，errors reject，warnings allowed；
-- protected tag：`claude plugin validate <isolated-dir> --strict`；
+- 普通分支不触发 Plugin validation；
+- canonical tag create/move：在隔离目录使用原生 [Plugin Profile v1](../../docs/design/systems/02-plugin-lifecycle/git/api-contract.md#marketplaceserver-plugin-profile-v1--normative-source-validation)，不依赖 Claude CLI；
 - `.claude-plugin/plugin.json` name 必须与服务端 Plugin name 精确、区分大小写一致。
 
 ### Marketplace generation

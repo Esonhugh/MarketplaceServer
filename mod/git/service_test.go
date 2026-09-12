@@ -896,11 +896,11 @@ func TestModConfigExposesRuntimeDependencies(t *testing.T) {
 			exported = append(exported, field)
 		}
 	}
-	if len(exported) != 2 || exported[0].Name != "StorageRoot" || exported[1].Name != "ValidatorBinary" {
-		t.Fatalf("exported Git config fields = %#v, want StorageRoot and ValidatorBinary", exported)
+	if len(exported) != 1 || exported[0].Name != "StorageRoot" {
+		t.Fatalf("exported Git config fields = %#v, want StorageRoot", exported)
 	}
 	for _, field := range exported {
-		want := map[string]string{"StorageRoot": "storageRoot", "ValidatorBinary": "validatorBinary"}[field.Name]
+		want := "storageRoot"
 		if got := field.Tag.Get("yaml"); got != want {
 			t.Fatalf("Config.%s yaml tag = %q, want %q", field.Name, got, want)
 		}
@@ -1024,10 +1024,18 @@ func TestRealGitSmartHTTPAuthorizedPushInteroperability(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(worktree, "README"), []byte("private push\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	runGitCommand(t, gitBinary, worktree, "add", "README")
+	manifestDirectory := filepath.Join(worktree, ".claude-plugin")
+	if err := os.MkdirAll(manifestDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(manifestDirectory, "plugin.json"), []byte(`{"name":"plugin-one","description":"receive quarantine fixture"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, gitBinary, worktree, "add", "README", ".claude-plugin/plugin.json")
 	runGitCommand(t, gitBinary, worktree, "commit", "-m", "initial")
+	runGitCommand(t, gitBinary, worktree, "tag", "v1.0.0")
 	runGitCommand(t, gitBinary, worktree, "remote", "add", "origin", strings.Replace(server.URL, "http://", "http://alice:git-write-pat@", 1)+"/git/team-a/plugin-one.git")
-	runGitCommand(t, gitBinary, worktree, "push", "origin", "HEAD:refs/heads/main")
+	runGitCommand(t, gitBinary, worktree, "push", "origin", "HEAD:refs/heads/main", "refs/tags/v1.0.0")
 
 	cloneDir := filepath.Join(t.TempDir(), "clone")
 	runGitCommand(t, gitBinary, "", "clone", strings.Replace(server.URL, "http://", "http://alice:git-write-pat@", 1)+"/git/team-a/plugin-one.git", cloneDir)
@@ -1108,9 +1116,6 @@ func newSmartHTTPTestEngineWithResolver(t *testing.T, config Config, repositoryR
 
 func newSmartHTTPTestEngineWithDependencies(t *testing.T, config Config, repositoryResolver gitservice.RepositoryResolver, gitPATAuthenticator auth.GitPATAuthenticator) *jinengine.Engine {
 	t.Helper()
-	if config.ValidatorBinary == "" {
-		config.ValidatorBinary = newScriptGit(t, "#!/bin/sh\nexit 0\n")
-	}
 	engine := jinengine.New()
 	hub := kernel.Hub{Injector: inject.New()}
 	resolver := repositoryResolver

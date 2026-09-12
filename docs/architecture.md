@@ -150,3 +150,5 @@ HTTP framework 是 `github.com/juanjiTech/jin`，不是 gin：
 - 响应使用 `c.Render(..., render.JSON{Data: ...})`，没有 `c.JSON` 快捷方法。
 
 外部输入在 handler/protocol boundary 校验，资源归属和授权仍由领域 service 或共享 authorizer 最终判定。
+
+Plugin source validation remains internal to `git`: native [Plugin Profile v1](design/systems/02-plugin-lifecycle/git/api-contract.md#marketplaceserver-plugin-profile-v1--normative-source-validation) requires no external Claude CLI process or additional kernel module. Cross-module callers retain `PluginSourceInspector`.

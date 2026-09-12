@@ -42,7 +42,7 @@
 - Plugin name 同时是 immutable slug/Git path；Plugin ID、repository ID、storage key、filesystem path 和 clone URL 由服务端管理。
 - Plugin read authorization 同时控制 metadata read 与 repository clone/fetch；Plugin write authorization 单独控制 push。Repository 没有独立 management CRUD 或独立产品权限。
 - bare Git repository 中的 objects/refs 是内容权威；数据库只保存归属、权限和可重建 projection metadata。
-- protected default branch 和 tags 在 live bare repository 之外导出 proposed commit 后验证。Default branch 运行 `claude plugin validate` 并允许 warning；tag 使用 `--strict`。两者都要求 manifest name 与 Plugin name 精确、区分大小写一致。
+- canonical tags 在 live bare repository 之外导出 proposed commit 后按 [Plugin Profile v1](design/systems/02-plugin-lifecycle/git/api-contract.md#marketplaceserver-plugin-profile-v1--normative-source-validation) 验证，并要求 manifest name 与 Plugin name 精确、区分大小写一致；普通分支不触发 Plugin validation。
 - ordinary development branch 可以包含中间状态，不强制 Plugin validation。
 - 删除先进入 owning Plugin lifecycle；物理 Git 删除是单独的高风险运维行为。
 
@@ -51,7 +51,7 @@
 - 发布只选择一个已存在、尚未发布的 canonical `v`-prefixed SemVer tag；manifest `version` 不作为发布 identity。
 - 同一 Plugin 的 canonical tag 对应一个 logical version；tag 的当前 full commit SHA 是该 version 内容权威。
 - tag 从 SHA-A 移到 SHA-B 时，同一 version 更新到 SHA-B，不创建新 version，也不自动 yank。
-- protected tag update 必须先通过 strict Claude Plugin validation、exact name check，以及所有引用该 Plugin+tag 的 revision projection prebuild；任何失败都拒绝 push。
+- protected tag update 必须先通过 native Plugin Profile v1 validation、exact name check，以及所有引用该 Plugin+tag 的 revision projection prebuild；任何失败都拒绝 push。
 - branch 只用于 development，不是 installable version。
 - latest 优先最高 stable SemVer；只有不存在 stable 时才选择最高 prerelease。
 - periodic reconciliation 可以发现绕过 receive policy 的 drift，并进入显式 operator recovery；不能假装 DB 和 Git ref 是一个 transaction。
