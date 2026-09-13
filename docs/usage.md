@@ -1,6 +1,6 @@
 # 使用与本地开发
 
-本文记录 MarketplaceServer 当前可用的 CLI、配置和开发流程。系统边界见 [架构](architecture.md)，生产与验证要求见 [运维、测试与交付](operations.md)。
+本文记录 MarketplaceServer 当前可用的 CLI、配置和开发流程。系统边界见 [架构](architecture.md)，生产部署见 [生产部署](deployment.md)，验证与恢复要求见 [运维、测试与交付](operations.md)。
 
 ## 运行时概览
 

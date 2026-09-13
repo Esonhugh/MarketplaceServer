@@ -1,6 +1,6 @@
 # 运维、测试与交付
 
-本文维护 MarketplaceServer 的验证门槛、构建流程和目标生产运行要求。当前能力见 [当前实现状态](current-state.md)；标为“推荐/规划”的拓扑不代表现有镜像已完整交付。
+本文维护 MarketplaceServer 的验证门槛、构建流程和目标生产运行要求。当前能力见 [当前实现状态](current-state.md)，可执行的单实例生产基线见 [生产部署](deployment.md)；标为“推荐/规划”的拓扑不代表现有镜像已完整交付。
 
 ## 变更验证
 
@@ -86,6 +86,8 @@ Identity migration 在以下任一情况返回 `identity: legacy credential sche
 开发数据库若可丢弃，operator 应先停止服务、确认没有需保留数据，再使用所选数据库的管理工具删除并重建整个开发 database/schema，然后重新启动让 migration 和 bootstrap 创建目标 schema。仓库不提供通用 destructive 命令，因为 PostgreSQL/SQLite、权限和部署形态不同。生产或任何有价值环境必须先备份，评估旧 PAT 的 revoke/rotation，并交付显式迁移方案；不得直接采用开发重建流程。
 
 ## 持久化数据
+
+当前可执行的单实例 topology、主机配置、reverse proxy 和启动验收统一见 [生产部署](deployment.md)。本节只维护跨部署形态的数据与恢复不变量。
 
 生产部署至少需要持久化：
 

@@ -17,7 +17,8 @@ MarketplaceServer 是基于 jframe 模块化内核的 Claude Code Plugin 与 Mar
 | [docs/protocols.md](docs/protocols.md) | REST、Git Smart HTTP、distribution、Marketplace JSON 与目标 SSH 协议 |
 | [docs/usage.md](docs/usage.md) | 当前 CLI、配置和本地开发流程 |
 | [docs/di-reference.md](docs/di-reference.md) | 当前 DI producer、consumer、类型与可用阶段 |
-| [docs/operations.md](docs/operations.md) | 测试、构建、部署、存储、恢复和交付门槛 |
+| [docs/operations.md](docs/operations.md) | 测试、构建、存储、恢复和交付门槛 |
+| [docs/deployment.md](docs/deployment.md) | 当前单实例 PostgreSQL 生产部署基线 |
 | [docs/roadmap.md](docs/roadmap.md) | 尚未完成的工作与交付顺序 |
 | [docs/ai-development.md](docs/ai-development.md) | MarketplaceServer 的 Agent 工作流 |
 | [docs/design/README.md](docs/design/README.md) | 通用数据、API contract、ADR 与后续 system design 索引 |
