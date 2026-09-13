@@ -1,7 +1,7 @@
 package git
 
 import (
-	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +16,6 @@ import (
 	"github.com/Esonhugh/MarketplaceServer/core/kernel"
 	backendmod "github.com/Esonhugh/MarketplaceServer/mod/backend"
 	identitymodel "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/model"
-	plugindomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/plugin"
 	"github.com/Esonhugh/MarketplaceServer/pkg/auth"
 	"github.com/Esonhugh/MarketplaceServer/pkg/gitservice"
 	"github.com/google/uuid"
@@ -147,7 +146,19 @@ func TestProductionAPIKeyRealGitPushAndClone(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(source, "README.md"), []byte("production auth\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	run(source, "add", "README.md")
+	for path, content := range map[string]string{
+		".claude-plugin/plugin.json": `{"name":"plugin-one","description":"Production Git fixture","version":"1.0.0"}`,
+		"skills/example/SKILL.md":    "---\nname: example\ndescription: Production Git test skill\n---\nExplain the test fixture.\n",
+	} {
+		filename := filepath.Join(source, path)
+		if err := os.MkdirAll(filepath.Dir(filename), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filename, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run(source, "add", ".")
 	run(source, "commit", "-m", "initial")
 	remote := strings.Replace(server.URL, "://", "://alice@", 1) + "/git/alice/plugin-one.git"
 	run(source, "push", remote, "HEAD:refs/heads/main")
@@ -201,23 +212,46 @@ func newProductionSmartHTTPHarness(t *testing.T, fakeBinary bool) *productionSma
 
 	ownerID := userID
 	namespaceID := uuid.NewString()
-	repositoryID := testRepositoryID
 	if err := db.Create(&identitymodel.Namespace{ID: namespaceID, Kind: identitymodel.NamespaceKindUser, Slug: "alice", DisplayName: "Alice", OwnerUserID: &ownerID}).Error; err != nil {
 		t.Fatal(err)
 	}
-	now := time.Now().UTC()
-	if err := db.Create(&plugindomain.Plugin{ID: repositoryID, NamespaceID: namespaceID, Slug: "plugin-one", Visibility: plugindomain.VisibilityPrivate, Status: plugindomain.PluginStatusDraft, CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+	if err := backendModule.Load(&hub); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&plugindomain.Repository{ID: repositoryID, Status: plugindomain.RepositoryStatusReady, StorageKey: repositoryID, CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+	login := httptest.NewRecorder()
+	loginBody, err := json.Marshal(map[string]string{"username": "alice", "password": password})
+	if err != nil {
 		t.Fatal(err)
 	}
-	var repositories gitservice.RepositoryService
-	if err := hub.Load(&repositories); err != nil {
-		t.Fatal(err)
+	loginRequest := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(string(loginBody)))
+	loginRequest.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(login, loginRequest)
+	var session struct {
+		Data struct {
+			Token string `json:"token"`
+		} `json:"data"`
 	}
-	if err := repositories.InitBareRepository(context.Background(), repositoryID); err != nil {
-		t.Fatal(err)
+	if login.Code != http.StatusOK || json.Unmarshal(login.Body.Bytes(), &session) != nil || session.Data.Token == "" {
+		t.Fatalf("fixture login failed: status=%d", login.Code)
+	}
+	create := httptest.NewRecorder()
+	createRequest := httptest.NewRequest(http.MethodPost, "/api/v1/namespaces/alice/plugins", strings.NewReader(`{"name":"plugin-one","visibility":"private"}`))
+	createRequest.Header.Set("Content-Type", "application/json")
+	createRequest.Header.Set("Authorization", "Bearer "+session.Data.Token)
+	engine.ServeHTTP(create, createRequest)
+	if create.Code != http.StatusCreated {
+		t.Fatalf("fixture Plugin creation failed: status=%d", create.Code)
+	}
+	resolved, err := backendModule.Resolve(t.Context(), "alice", "plugin-one")
+	if err != nil {
+		t.Fatalf("resolve fixture Plugin: %v", err)
+	}
+	repositoryID := resolved.ID
+	if _, err := uuid.Parse(repositoryID); err != nil {
+		t.Fatal("production Plugin resolver did not return a UUID")
+	}
+	if resolved.NamespaceID != namespaceID || resolved.Status != gitservice.StatusReady {
+		t.Fatalf("fixture resolution has expected namespace=%t, status=%q", resolved.NamespaceID == namespaceID, resolved.Status)
 	}
 	if err := gitModule.Load(&hub); err != nil {
 		t.Fatal(err)
@@ -243,6 +277,9 @@ func (harness *productionSmartHTTPHarness) createToken(t *testing.T, name, prese
 	}
 	tokenID := uuid.NewString()
 	token := identitymodel.PersonalAccessToken{ID: tokenID, UserID: harness.userID, Name: name, Preset: preset, SecretPlaintext: plaintext, SecretHMAC: index, ExpiresAt: expiresAt, RevokedAt: revokedAt}
+	if expiresAt != nil {
+		token.CreatedAt = expiresAt.Add(-time.Minute)
+	}
 	if err := harness.db.Create(&token).Error; err != nil {
 		t.Fatal(err)
 	}

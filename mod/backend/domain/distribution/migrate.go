@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Esonhugh/MarketplaceServer/mod/backend/domain/migration"
 	"gorm.io/gorm"
 )
 
@@ -36,8 +37,19 @@ func Migrate(db *gorm.DB) error {
 			return fmt.Errorf("migrate distribution models: plugin lifecycle table %s is missing", table)
 		}
 	}
-	if err := db.AutoMigrate(migrationModels...); err != nil {
-		return fmt.Errorf("migrate distribution models: %w", err)
+	migrate := func(tx *gorm.DB) error {
+		if driver == "postgres" {
+			if err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || '.distribution_migration', 0))`).Error; err != nil {
+				return fmt.Errorf("lock distribution migration: %w", err)
+			}
+		}
+		if err := migration.AutoMigrate(tx, migrationModels...); err != nil {
+			return fmt.Errorf("migrate distribution models: %w", err)
+		}
+		return nil
 	}
-	return nil
+	if driver == "postgres" {
+		return db.Transaction(migrate)
+	}
+	return migrate(db)
 }

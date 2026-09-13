@@ -5,6 +5,7 @@ import (
 
 	distributiondomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/distribution"
 	identitydao "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/identity/dao"
+	"github.com/Esonhugh/MarketplaceServer/mod/backend/domain/migration"
 	plugindomain "github.com/Esonhugh/MarketplaceServer/mod/backend/domain/plugin"
 	"gorm.io/gorm"
 )
@@ -13,6 +14,10 @@ func Migrate(db *gorm.DB) error {
 	if db == nil {
 		return fmt.Errorf("migrate backend models: nil database")
 	}
+	return migration.WithBackendLock(db, migrateDomains)
+}
+
+func migrateDomains(db *gorm.DB) error {
 	if err := identitydao.Migrate(db); err != nil {
 		return fmt.Errorf("migrate backend identity dependencies: %w", err)
 	}

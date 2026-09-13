@@ -124,7 +124,11 @@ func TestPostgresIdentityRepositorySemantics(t *testing.T) {
 		return model.PersonalAccessToken{ID: uuid.NewString(), UserID: user.ID, Name: name, Preset: model.TokenPresetSubscriptionRead, SecretPlaintext: plaintext, SecretHMAC: secretHMAC}
 	}
 	revoked, expired := newToken("revoked"), newToken("expired")
-	revoked.RevokedAt, expired.ExpiresAt = &now, &now
+	revoked.RevokedAt = &now
+	// A valid token lifetime that has already ended at the query time.
+	expiresAt := now.Add(-time.Minute)
+	expired.CreatedAt = now.Add(-2 * time.Minute)
+	expired.ExpiresAt = &expiresAt
 	for name, token := range map[string]model.PersonalAccessToken{
 		"revoked": revoked,
 		"expired": expired,

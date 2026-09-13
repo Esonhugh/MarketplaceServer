@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Esonhugh/MarketplaceServer/mod/backend/domain/migration"
 	"gorm.io/gorm"
 )
 
@@ -56,7 +57,19 @@ func Migrate(db *gorm.DB) error {
 		}
 	}
 	if err := db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.AutoMigrate(migrationModels...); err != nil {
+		if driver == "postgres" {
+			// Serialize repeated startup migrations in this schema, including the
+			// empty-table case where there is no relation to lock yet.
+			if err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || '.plugin_migration', 0))`).Error; err != nil {
+				return fmt.Errorf("lock plugin lifecycle migration: %w", err)
+			}
+			// DDL and guard replacement commit together; a failed migration restores
+			// the old guards. Only triggers owned by this domain are removed.
+			if err := migration.DropTriggerGuards(tx, postgresTriggerGuards); err != nil {
+				return fmt.Errorf("remove plugin lifecycle database guards: %w", err)
+			}
+		}
+		if err := migration.AutoMigrate(tx, migrationModels...); err != nil {
 			return fmt.Errorf("migrate plugin lifecycle models: %w", err)
 		}
 		if err := installDatabaseGuards(tx, driver); err != nil {
@@ -121,15 +134,7 @@ func installDatabaseGuards(db *gorm.DB, driver string) error {
 			`ALTER TABLE plugin_versions DROP CONSTRAINT IF EXISTS chk_plugin_versions_content`,
 			`ALTER TABLE plugin_versions ADD CONSTRAINT chk_plugin_versions_content CHECK ((status = 'available' AND raw_tag_object_id IS NOT NULL AND commit_sha IS NOT NULL AND manifest_digest IS NOT NULL AND manifest_snapshot IS NOT NULL AND deleted_at IS NULL) OR (status = 'deleted' AND raw_tag_object_id IS NULL AND commit_sha IS NULL AND manifest_digest IS NULL AND manifest_snapshot IS NULL AND deleted_at IS NOT NULL))`,
 			`CREATE OR REPLACE FUNCTION marketplace_reject_plugin_immutable_update() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'immutable plugin lifecycle data'; END; $$ LANGUAGE plpgsql`,
-			`DROP TRIGGER IF EXISTS marketplace_plugins_identity_immutable ON plugins`,
-			`CREATE TRIGGER marketplace_plugins_identity_immutable BEFORE UPDATE OF id, namespace_id, slug, created_at ON plugins FOR EACH ROW WHEN (OLD.id IS DISTINCT FROM NEW.id OR OLD.namespace_id IS DISTINCT FROM NEW.namespace_id OR OLD.slug IS DISTINCT FROM NEW.slug OR OLD.created_at IS DISTINCT FROM NEW.created_at) EXECUTE FUNCTION marketplace_reject_plugin_immutable_update()`,
-			`DROP TRIGGER IF EXISTS marketplace_version_history_immutable ON plugin_version_history`,
-			`CREATE TRIGGER marketplace_version_history_immutable BEFORE UPDATE OR DELETE ON plugin_version_history FOR EACH ROW EXECUTE FUNCTION marketplace_reject_plugin_immutable_update()`,
-			`DROP TRIGGER IF EXISTS marketplace_projection_artifact_immutable ON projection_artifacts`,
-			`CREATE TRIGGER marketplace_projection_artifact_immutable BEFORE UPDATE OF id, kind, plugin_id, tag, source_object_id, source_commit_sha, source_tree_sha, revision_id, content_digest, distribution_sha, storage_key, created_at ON projection_artifacts FOR EACH ROW EXECUTE FUNCTION marketplace_reject_plugin_immutable_update()`,
 			`CREATE OR REPLACE FUNCTION marketplace_validate_plugin_default() RETURNS trigger AS $$ BEGIN IF NEW.default_version_tag IS NOT NULL AND NOT EXISTS (SELECT 1 FROM plugin_versions v WHERE v.plugin_id = NEW.id AND v.tag = NEW.default_version_tag AND v.status = 'available') THEN RAISE EXCEPTION 'default version is unavailable'; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql`,
-			`DROP TRIGGER IF EXISTS marketplace_plugins_default_available ON plugins`,
-			`CREATE TRIGGER marketplace_plugins_default_available BEFORE INSERT OR UPDATE OF default_version_tag ON plugins FOR EACH ROW EXECUTE FUNCTION marketplace_validate_plugin_default()`,
 		}
 	case "sqlite":
 		statements = []string{
@@ -148,5 +153,15 @@ func installDatabaseGuards(db *gorm.DB, driver string) error {
 			return err
 		}
 	}
+	if driver == "postgres" {
+		return migration.InstallTriggerGuards(db, postgresTriggerGuards)
+	}
 	return nil
+}
+
+var postgresTriggerGuards = []migration.TriggerGuard{
+	{Table: "plugins", Name: "marketplace_plugins_identity_immutable", CreateSQL: `CREATE TRIGGER marketplace_plugins_identity_immutable BEFORE UPDATE OF id, namespace_id, slug, created_at ON plugins FOR EACH ROW WHEN (OLD.id IS DISTINCT FROM NEW.id OR OLD.namespace_id IS DISTINCT FROM NEW.namespace_id OR OLD.slug IS DISTINCT FROM NEW.slug OR OLD.created_at IS DISTINCT FROM NEW.created_at) EXECUTE FUNCTION marketplace_reject_plugin_immutable_update()`},
+	{Table: "plugin_version_history", Name: "marketplace_version_history_immutable", CreateSQL: `CREATE TRIGGER marketplace_version_history_immutable BEFORE UPDATE OR DELETE ON plugin_version_history FOR EACH ROW EXECUTE FUNCTION marketplace_reject_plugin_immutable_update()`},
+	{Table: "projection_artifacts", Name: "marketplace_projection_artifact_immutable", CreateSQL: `CREATE TRIGGER marketplace_projection_artifact_immutable BEFORE UPDATE OF id, kind, plugin_id, tag, source_object_id, source_commit_sha, source_tree_sha, revision_id, content_digest, distribution_sha, storage_key, created_at ON projection_artifacts FOR EACH ROW EXECUTE FUNCTION marketplace_reject_plugin_immutable_update()`},
+	{Table: "plugins", Name: "marketplace_plugins_default_available", CreateSQL: `CREATE TRIGGER marketplace_plugins_default_available BEFORE INSERT OR UPDATE OF default_version_tag ON plugins FOR EACH ROW EXECUTE FUNCTION marketplace_validate_plugin_default()`},
 }

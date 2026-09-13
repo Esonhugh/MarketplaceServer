@@ -23,29 +23,7 @@ import (
 const postgresTestDSNEnvironment = "MARKETPLACE_TEST_POSTGRES_DSN"
 
 func TestPostgresDistributionConstraints(t *testing.T) {
-	dsn := os.Getenv(postgresTestDSNEnvironment)
-	if dsn == "" {
-		t.Skip(postgresTestDSNEnvironment + " is not configured; skipping PostgreSQL constraint integration test")
-	}
-
-	admin, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
-	if err != nil {
-		t.Fatalf("open PostgreSQL integration database: %v", err)
-	}
-	schema := "marketplace_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	if err := admin.Exec(`CREATE SCHEMA "` + schema + `"`).Error; err != nil {
-		t.Fatalf("create integration schema: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := admin.Exec(`DROP SCHEMA IF EXISTS "` + schema + `" CASCADE`).Error; err != nil {
-			t.Errorf("drop integration schema: %v", err)
-		}
-	})
-
-	db, err := gorm.Open(postgres.Open(postgresDSNWithSearchPath(t, dsn, schema)), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
-	if err != nil {
-		t.Fatalf("open PostgreSQL integration schema: %v", err)
-	}
+	db := newPostgresMigrationDB(t)
 	if err := identitydao.Migrate(db); err != nil {
 		t.Fatalf("migrate identity dependencies: %v", err)
 	}
@@ -170,7 +148,7 @@ func insertConstraintFixture(t *testing.T, db *gorm.DB) constraintFixture {
 		&identitymodel.Namespace{ID: fixture.namespaceID, Kind: identitymodel.NamespaceKindTeam, Slug: "security", DisplayName: "Security"},
 		&Plugin{ID: fixture.pluginID, NamespaceID: fixture.namespaceID, Slug: "scanner", Visibility: "public", Status: plugindomain.PluginStatusActive},
 		&Repository{ID: fixture.repositoryID, Status: RepositoryStatusReady, StorageKey: uuid.NewString()},
-		&PluginVersion{ID: fixture.versionID, PluginID: fixture.pluginID, Tag: "v1.0.0", CommitSHA: &commitSHA, ManifestDigest: &manifestDigest, ManifestSnapshot: []byte(`{}`), Status: plugindomain.VersionStatusAvailable, PublishedAt: now},
+		&PluginVersion{ID: fixture.versionID, PluginID: fixture.pluginID, Tag: "v1.0.0", RawTagObjectID: &commitSHA, CommitSHA: &commitSHA, ManifestDigest: &manifestDigest, ManifestSnapshot: []byte(`{}`), Status: plugindomain.VersionStatusAvailable, PublishedAt: now},
 		&MarketplaceTemplate{ID: fixture.templateID, NamespaceID: fixture.namespaceID, Slug: "web", Name: "Web", Visibility: "public", Status: StatusActive},
 		&MarketplaceRevision{ID: fixture.revisionID, TemplateID: fixture.templateID, Revision: 1, ContentJSON: []byte(`{"name":"web"}`), ContentDigest: strings.Repeat("6", 64), Status: StatusActive, PublishedAt: now},
 	}
@@ -192,4 +170,101 @@ func postgresDSNWithSearchPath(t *testing.T, dsn, schema string) string {
 		return parsed.String()
 	}
 	return fmt.Sprintf("%s search_path=%s", dsn, schema)
+}
+
+func newPostgresMigrationDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	dsn := os.Getenv(postgresTestDSNEnvironment)
+	if dsn == "" {
+		t.Skip(postgresTestDSNEnvironment + " is not configured; skipping PostgreSQL constraint integration test")
+	}
+
+	admin, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatalf("open PostgreSQL integration database: %v", err)
+	}
+	adminSQL, err := admin.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = adminSQL.Close() })
+	schema := "marketplace_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	if err := admin.Exec(`CREATE SCHEMA "` + schema + `"`).Error; err != nil {
+		t.Fatalf("create integration schema: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := admin.Exec(`DROP SCHEMA IF EXISTS "` + schema + `" CASCADE`).Error; err != nil {
+			t.Errorf("drop integration schema: %v", err)
+		}
+	})
+
+	db, err := gorm.Open(postgres.Open(postgresDSNWithSearchPath(t, dsn, schema)), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatalf("open PostgreSQL integration schema: %v", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	return db
+}
+
+func TestPostgresDistributionConcurrentMigrate(t *testing.T) {
+	db := newPostgresMigrationDB(t)
+	if err := identitydao.Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := plugindomain.Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	db = db.WithContext(ctx)
+	for _, phase := range []string{"fresh", "repeat"} {
+		t.Run(phase, func(t *testing.T) {
+			start := make(chan struct{})
+			results := make(chan error, 4)
+			for range 4 {
+				go func() { <-start; results <- Migrate(db) }()
+			}
+			close(start)
+			for range 4 {
+				if err := <-results; err != nil {
+					t.Errorf("concurrent migration: %v", err)
+				}
+			}
+		})
+	}
+	fixture := insertConstraintFixture(t, db)
+	if err := db.Model(&MarketplaceRevision{}).Where("id = ?", fixture.revisionID).Update("template_id", uuid.NewString()).Error; err == nil {
+		t.Fatal("migration lost revision template foreign key")
+	}
+}
+
+func TestPostgresDistributionMigrationRollsBackDDL(t *testing.T) {
+	db := newPostgresMigrationDB(t)
+	if err := identitydao.Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := plugindomain.Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	// Force a late DDL failure after earlier distribution tables were created.
+	if err := db.Exec("CREATE VIEW plugin_distributions AS SELECT 1 AS sentinel").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(db); err == nil {
+		t.Fatal("migration accepted conflicting view")
+	}
+	if db.Migrator().HasTable(&MarketplaceTemplate{}) {
+		t.Fatal("failed migration left partial distribution DDL")
+	}
+	if err := db.Exec("DROP VIEW plugin_distributions").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(db); err != nil {
+		t.Fatalf("retry migration: %v", err)
+	}
+	insertConstraintFixture(t, db)
 }

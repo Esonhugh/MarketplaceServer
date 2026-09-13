@@ -139,7 +139,7 @@
 
 ## 当前持久化基础
 
-`mod/backend/migrate.go` 按顺序装配 identity、Plugin lifecycle 与 distribution migrations。
+`mod/backend/migrate.go` 按顺序装配 identity、Plugin lifecycle 与 distribution migrations。PostgreSQL 完整序列先在专用连接上取得 schema-scoped backend session advisory lock，三个领域事务绑定同一连接并独立提交，避免跨领域 DDL 交错死锁；不使用外层长事务，并拒绝从已有事务调用完整 backend migration。锁层级固定为 backend session lock → domain xact lock → DDL，key 分离；退出时使用独立限时 context 解锁，解锁失败返回错误并丢弃连接，取消获取锁时也丢弃连接以免遗留 session lock。SQLite orchestration 不变。PostgreSQL 下 identity、Plugin 与 distribution migration 各自在事务内按 schema/domain 获取 advisory xact lock，覆盖 AutoMigrate 与 foreign key 安装，避免同领域并发迁移竞态和 partial DDL；identity 与 Plugin 仅临时移除并重装本领域拥有的 trigger guards，使重复迁移可执行且失败回滚恢复原 guard；Plugin/distribution 的 AutoMigrate 限定本领域 models，随后安装 foreign keys，避免关系递归迁移修改其他领域的受保护表。
 
 Identity 当前迁移：
 
